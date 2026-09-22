@@ -4,7 +4,7 @@ A browser tool that turns raw LILA BLACK telemetry into something a Level Design
 actually read: player paths drawn on the real minimaps, kill/death/loot/traffic heatmaps,
 dead-space detection, and per-match playback.
 
-**Live:** https://lila-player-journey.vercel.app
+**Live:** https://jabberwock555.github.io/lila-player-journey/
 
 ![Traffic heatmap across 566 Ambrose Valley matches](docs/screenshot-traffic.png)
 *Aggregate view — traffic density across 566 matches, with kill/death/loot markers overlaid.*
@@ -41,7 +41,7 @@ Keyboard: `Space` play/pause · `1`–`6` heatmap mode · `P`/`M` toggle paths/m
 | Frontend | React 18 + TypeScript + Vite | Fast builds, typed data contracts, no runtime framework weight |
 | Rendering | Canvas 2D | 89k events and 800+ polylines render in a few ms; no WebGL dependency or shader maintenance |
 | Styling | Tailwind CSS | Dense, consistent dark UI without a component library |
-| Hosting | Vercel (static) | No server needed — see ARCHITECTURE.md |
+| Hosting | GitHub Pages (static) | No server needed — see ARCHITECTURE.md |
 
 There is **no backend and no database**. The whole dataset compresses to ~2.6 MB of static
 assets, so the browser loads it once and every filter, aggregation and heatmap is computed
@@ -82,6 +82,16 @@ npm run build        # -> dist/
 npm run preview
 ```
 
+### Deploy
+
+```bash
+./deploy.sh          # builds and publishes dist/ to the gh-pages branch
+```
+
+The app is a plain static bundle, so `dist/` can be dropped on any static host
+(Vercel, Netlify, S3, nginx). `vite.config.ts` reads `BASE_PATH` for hosts that serve the
+app from a subpath; it defaults to `/` and needs no setting when served from a domain root.
+
 ### Environment variables
 
 **None.** The app is fully static and reads only its own bundled assets.
@@ -101,6 +111,7 @@ src/lib/
   heatmap.ts             density grids, blur, colour ramps, dead-space detection
   render.ts              canvas renderer + world<->screen projection
 src/components/          MapView, Sidebar, Inspector, Timeline, Onboarding
+deploy.sh                build + publish to gh-pages
 ARCHITECTURE.md          design decisions, coordinate mapping, trade-offs
 INSIGHTS.md              three findings from the data, with evidence
 ```
