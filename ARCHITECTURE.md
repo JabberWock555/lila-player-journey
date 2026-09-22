@@ -170,10 +170,16 @@ actually stood. This keeps the off-map void out of the result but will miss genu
 reachable regions that nobody has ever entered — so the figure is a floor on wasted space,
 not an exact measure.
 
-**Matches are almost entirely solo.** 779 of 796 matches contain exactly one human. Playback
-is therefore scoped to a single match: overlaying several matches would superimpose unrelated
-wall-clock timelines, which would be misleading rather than useful. The UI says so explicitly
-when more than one match is selected.
+**Matches are almost entirely solo.** 779 of 796 matches contain exactly one human, so
+comparing runs means comparing *matches*, not players within one. Several matches can be
+selected and played together, but their `ts` values are absolute Unix seconds and can sit
+hours apart — played on one wall-clock axis they would be strung out with nothing visible
+at any given moment. So whenever more than one match is in scope, `selectEvents` rebases
+each onto its own `t0` and everything downstream (paths, markers, timeline histogram,
+scrubber) reads that relative time. The timeline labels this "synced from each match
+start" so the axis is never mistaken for wall clock. A side effect: the aggregate density
+strip now reads as *events by time-into-match* across every match, which is a more useful
+axis than the six-day span it replaced.
 
 ## Trade-offs
 
@@ -186,6 +192,10 @@ when more than one match is selected.
 | Per-map bundles, loaded on demand | One combined bundle | Ambrose is 70% of the data; nobody needs Lockdown's bytes to look at Ambrose |
 | Normalise heatmaps against the 97–99th percentile | Normalise against the max | A single extreme spawn cell otherwise flattens the entire field to near-zero |
 | Distinct marker **shapes** per event type | Colour only | Markers overlap heavily at POIs; shape survives overlap, colour-blindness and greyscale |
+| Positions as a separate toggleable layer | Always drawing dots under the paths | 51k position samples drawn as dots swamp the discrete events; as its own layer it answers "where was everyone" without competing with them |
+| Rebase time per match when several are selected | Absolute wall clock, or forbidding multi-select | Absolute time spreads matches across hours with nothing on screen; forbidding it removes the main way to compare runs |
+| Studio exports config text | Studio writes the config | A static site has no backend and no repo access. Producing the exact block (and validating imports against it) removes the fiddly part without pretending to a capability the deploy does not have |
+| `hyparquet` loaded on demand | Bundled, or no in-browser parsing | 170 kB gzipped of parquet reader should not be paid by everyone to open a heatmap; a dynamic import keeps it to people who actually import data |
 | View presets that switch with scope | Fixed defaults | 836 overlaid journeys at readable opacity bury the map; one journey at aggregate opacity is invisible. The preset flips with the selection and remains user-overridable |
 | Static hosting | Server-rendered app | Nothing is dynamic. A CDN-served SPA has no cold starts and no runtime cost |
 | `must-revalidate` on `/data` and `/maps` | Long cache + `stale-while-revalidate` | See below — long-caching stable paths broke the app across a deploy |
@@ -217,6 +227,33 @@ Two guards back it up, because a proxy could still serve something stale:
 `loadManifest()` rejects a manifest missing any key the app needs and says a hard reload
 will fix it, and `decode()` checks each binary's byte length against `count × 21` from
 the manifest and refuses to render if they disagree.
+
+## The data studio
+
+Adding a map or a day of telemetry used to mean editing `dataset.json` by hand and running
+the ETL blind. The **+ Data** panel removes the guesswork from both halves without
+pretending the static deploy can do something it cannot.
+
+**Calibrating a map** is the part worth having in a UI. It draws the minimap with real
+recorded positions on top and re-projects live as `scale` / `originX` / `originZ` change,
+so the alignment is judged the only way it can be — by whether traffic follows the roads.
+**Fit to data** runs the same padded-extent heuristic as `etl/calibrate_map.py`. The panel
+shows what share of events land inside the frame, with the caveat stated next to it: a
+uniformly shifted box still contains every point, so the percentage rules out gross errors
+and nothing more. The output is the `dataset.json` block, ready to paste.
+
+**Importing telemetry** parses dropped `.nakama-0` files in the browser with `hyparquet`
+(dynamically imported, so its ~170 kB gzipped never loads for anyone who does not open the
+panel) and applies the same normalisation as `etl/build_data.py` — `ts` as Unix seconds,
+bots by `user_id` shape, `.nakama-N` stripped, only redundant *position* duplicates
+dropped. It reports events per map, unknown event types, unconfigured `map_id`s, the date
+range and the out-of-bounds rate. Verified against the pipeline: three Feb 14 files give
+395 events, 0 dropped duplicates and 0.00% out of bounds from both the browser and Python.
+
+What it deliberately does not do is persist. The deploy is a static bundle with no backend
+and no write access to the repo, so the honest boundary is: the studio tells you the
+config is right and the data is clean, and the ETL commits it. Claiming otherwise would
+mean an import that silently vanished on reload.
 
 ## Scaling roadmap
 

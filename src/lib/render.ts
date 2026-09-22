@@ -59,6 +59,9 @@ export interface RenderOpts {
   pathOpacity: number
   showMarkers: boolean
   markerScale: number
+  /** draw every position sample as an actor-coloured dot */
+  showPositions: boolean
+  positionScale: number
   /** playback cursor, in unix seconds; null = show everything */
   playhead: number | null
   /** trail length behind the playhead, in seconds */
@@ -104,7 +107,10 @@ export function render(canvas: HTMLCanvasElement, o: RenderOpts) {
   }
 
   const { events, meta, config } = o.bundle
+  const { timeOrigin } = o.selection
   const isPos = (code: number) => config.positionCodes.has(code)
+  /** Event time rebased onto its own match's start when several are selected. */
+  const relT = (idx: number) => events.t[idx] - timeOrigin[events.mi[idx]]
   const inWindow = (t: number) =>
     o.playhead === null || (t <= o.playhead && t >= o.playhead - o.trailSec)
 
@@ -132,7 +138,7 @@ export function render(canvas: HTMLCanvasElement, o: RenderOpts) {
       for (let i = 0; i < j.n; i++) {
         const idx = j.o + i
         if (!isPos(events.ev[idx])) continue
-        const t = events.t[idx]
+        const t = relT(idx)
         if (!inWindow(t)) {
           drawing = false
           continue
@@ -153,9 +159,9 @@ export function render(canvas: HTMLCanvasElement, o: RenderOpts) {
         for (let i = j.n - 1; i >= 0; i--) {
           const idx = j.o + i
           if (!isPos(events.ev[idx])) continue
-          if (events.t[idx] <= o.playhead) { headIdx = idx; break }
+          if (relT(idx) <= o.playhead) { headIdx = idx; break }
         }
-        if (headIdx >= 0 && events.t[headIdx] >= o.playhead - o.trailSec) {
+        if (headIdx >= 0 && relT(headIdx) >= o.playhead - o.trailSec) {
           const [cx, cy] = mapToCanvas(events.u[headIdx], 1 - events.v[headIdx], r)
           ctx.setLineDash([])
           ctx.globalAlpha = 1
@@ -170,6 +176,31 @@ export function render(canvas: HTMLCanvasElement, o: RenderOpts) {
       }
     }
     ctx.setLineDash([])
+    ctx.globalAlpha = 1
+  }
+
+  // --- actor position markers ---------------------------------------------
+  // Where players actually stood, as dots rather than a line. This is the view
+  // that answers "show me every human on this map" with paths turned off.
+  if (o.showPositions) {
+    const r2 = o.positionScale
+    for (let ji = 0; ji < o.selection.journeys.length; ji++) {
+      const j = o.selection.journeys[ji]
+      const isBot = meta.players[j.p]?.bot ?? false
+      const dimmed = o.focusJourney !== null && o.focusJourney !== ji
+      ctx.fillStyle = isBot ? ACTOR_COLORS.bot : ACTOR_COLORS.human
+      ctx.globalAlpha = dimmed ? 0.06 : 0.75
+      for (let i = 0; i < j.n; i++) {
+        const idx = j.o + i
+        if (!isPos(events.ev[idx])) continue
+        if (!inWindow(relT(idx))) continue
+        const [cx, cy] = mapToCanvas(events.u[idx], 1 - events.v[idx], r)
+        if (cx < -10 || cy < -10 || cx > width + 10 || cy > height + 10) continue
+        ctx.beginPath()
+        ctx.arc(cx, cy, r2, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
     ctx.globalAlpha = 1
   }
 
@@ -188,7 +219,7 @@ export function render(canvas: HTMLCanvasElement, o: RenderOpts) {
       const shape = def?.marker ?? 'dot'
       for (let i = 0; i < idxs.length; i++) {
         const idx = idxs[i]
-        if (!inWindow(events.t[idx])) continue
+        if (!inWindow(relT(idx))) continue
         const [cx, cy] = mapToCanvas(events.u[idx], 1 - events.v[idx], r)
         if (cx < -20 || cy < -20 || cx > width + 20 || cy > height + 20) continue
         drawMarker(ctx, shape, cx, cy, o.markerScale)
@@ -281,7 +312,11 @@ function drawMarker(
   ctx.restore()
 }
 
-/** Nearest discrete event to a canvas point, within `radius` px. */
+/**
+ * Nearest event to a canvas point, within `radius` px. Discrete events always
+ * win over position samples — a kill marker sitting on the path that produced
+ * it should be what you get when you hover it.
+ */
 export function pickEvent(
   bundle: MapBundle,
   selection: Selection,
@@ -291,6 +326,7 @@ export function pickEvent(
   height: number,
   view: View,
   radius = 12,
+  includePositions = false,
 ): number | null {
   const r = mapRect(width, height, view)
   const { events } = bundle
@@ -314,6 +350,23 @@ export function pickEvent(
         bestDist = d
         best = idx
       }
+    }
+  }
+  if (best !== null || !includePositions) return best
+
+  // Nothing discrete nearby — fall back to position samples so a player dot is
+  // identifiable on hover. Tighter radius, since these are dense.
+  let posDist = (radius * 0.6) ** 2
+  const idxs = selection.positions
+  for (let i = 0; i < idxs.length; i++) {
+    const idx = idxs[i]
+    const [px, py] = mapToCanvas(events.u[idx], 1 - events.v[idx], r)
+    const dx = px - cx
+    const dy = py - cy
+    const d = dx * dx + dy * dy
+    if (d < posDist) {
+      posDist = d
+      best = idx
     }
   }
   return best

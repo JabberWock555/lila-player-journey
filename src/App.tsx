@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { loadManifest, loadMap } from './lib/data'
 import { buildColdmap, buildHeatmap } from './lib/heatmap'
-import { defaultFilters, gatherUV, selectEvents, type Filters } from './lib/select'
+import {
+  defaultFilters, defaultMatchFilters, gatherUV, selectEvents,
+  type Filters, type MatchFilters,
+} from './lib/select'
 import { IDENTITY_VIEW, type View } from './lib/render'
 import { buildDatasetConfig, type DatasetConfig, type Manifest, type MapBundle } from './lib/types'
 import { MapView } from './components/MapView'
@@ -9,6 +12,7 @@ import { Sidebar } from './components/Sidebar'
 import { Inspector } from './components/Inspector'
 import { Timeline } from './components/Timeline'
 import { Onboarding } from './components/Onboarding'
+import { Studio } from './components/Studio'
 
 /** 'none' | 'traffic' | 'cold' are structural; anything else is a layer id. */
 export type HeatMode = string
@@ -22,6 +26,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
 
   const [filters, setFilters] = useState<Filters>(defaultFilters)
+  const [matchFilters, setMatchFilters] = useState<MatchFilters>(defaultMatchFilters)
+  const [studioOpen, setStudioOpen] = useState(
+    () => new URLSearchParams(location.search).get('studio') === '1',
+  )
   const [view, setView] = useState<View>(IDENTITY_VIEW)
 
   const [heatMode, setHeatMode] = useState<HeatMode>('traffic')
@@ -32,6 +40,8 @@ export default function App() {
   const [pathOpacity, setPathOpacity] = useState(0.08)
   const [showMarkers, setShowMarkers] = useState(true)
   const [markerScale, setMarkerScale] = useState(2.5)
+  const [showPositions, setShowPositions] = useState(false)
+  const [positionScale, setPositionScale] = useState(1.25)
   const [focusJourney, setFocusJourney] = useState<number | null>(null)
 
   const [playhead, setPlayhead] = useState<number | null>(null)
@@ -83,16 +93,17 @@ export default function App() {
     [bundle, filters],
   )
 
-  const singleMatch = (selection?.stats.matches ?? 0) === 1
+  // Playback needs an explicit match selection. With several, `selectEvents`
+  // rebases each onto its own start so they run together rather than being
+  // smeared across hours of wall clock.
+  const playable = filters.matchIds.size > 0 && (selection?.stats.matches ?? 0) > 0
 
-  // Playback only makes sense for one match — a mixed selection would overlay
-  // unrelated wall-clock timelines on top of each other.
   useEffect(() => {
-    if (!singleMatch) {
+    if (!playable) {
       setPlayhead(null)
       setPlaying(false)
     }
-  }, [singleMatch])
+  }, [playable])
 
   // Reset the playhead when the selected match changes, and swap to the view
   // preset that suits the new scope. Aggregate views need near-transparent
@@ -102,10 +113,13 @@ export default function App() {
     setPlaying(false)
     setPlayhead(null)
     setFocusJourney(null)
-    const single = filters.matchIds.size === 1
-    setPathOpacity(single ? 0.9 : 0.08)
-    setMarkerScale(single ? 4.5 : 2.5)
-    setHeatMode((m) => (single && m === 'traffic' ? 'none' : m))
+    const n = filters.matchIds.size
+    // A handful of runs can stay bright; hundreds overlaid need to fade back or
+    // they bury the minimap underneath.
+    const focused = n > 0 && n <= 12
+    setPathOpacity(focused ? (n === 1 ? 0.9 : 0.55) : 0.08)
+    setMarkerScale(focused ? 4.5 : 2.5)
+    setHeatMode((m) => (focused && m === 'traffic' ? 'none' : m))
   }, [filters.matchIds, mapId])
 
   const heat = useMemo(() => {
@@ -135,10 +149,11 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return
-      if (e.code === 'Space' && singleMatch) { e.preventDefault(); setPlaying((p) => !p) }
+      if (e.code === 'Space' && playable) { e.preventDefault(); setPlaying((p) => !p) }
       if (e.key === 'f') setView(IDENTITY_VIEW)
       if (e.key === 'p') setShowPaths((v) => !v)
       if (e.key === 'm') setShowMarkers((v) => !v)
+      if (e.key === 'o') setShowPositions((v) => !v)
       if (e.key >= '1' && e.key <= '9' && config) {
         const modes: HeatMode[] = ['none', 'traffic', ...config.layerIds, 'cold']
         const pick = modes[Number(e.key) - 1]
@@ -147,11 +162,12 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [singleMatch, config])
+  }, [playable, config])
 
   const handleMap = useCallback((id: string) => {
     setMapId(id)
     setFilters(defaultFilters(config?.layerIds ?? []))
+    setMatchFilters(defaultMatchFilters())
     setView(IDENTITY_VIEW)
   }, [config])
 
@@ -182,7 +198,10 @@ export default function App() {
         onMap={handleMap}
         filters={filters}
         onFilters={setFilters}
+        matchFilters={matchFilters}
+        onMatchFilters={setMatchFilters}
         loading={loading}
+        onOpenStudio={() => setStudioOpen(true)}
       />
 
       <main className="flex-1 min-w-0 flex flex-col">
@@ -199,6 +218,8 @@ export default function App() {
               pathOpacity={pathOpacity}
               showMarkers={showMarkers}
               markerScale={markerScale}
+              showPositions={showPositions}
+              positionScale={positionScale}
               playhead={playhead}
               trailSec={trailSec}
               focusJourney={focusJourney}
@@ -211,10 +232,10 @@ export default function App() {
             </div>
           )}
 
-          {!singleMatch && bundle && (
+          {!playable && bundle && (
             <div className="absolute top-3 left-3 panel bg-ink-900/85 px-2.5 py-1.5 text-[10px] text-slate-400 max-w-[260px]">
               Aggregate view — <span className="text-slate-200">{selection?.stats.matches ?? 0} matches</span> overlaid.
-              Pick one match in the sidebar to enable playback.
+              Select one or more matches in the sidebar to play them back together.
             </div>
           )}
         </div>
@@ -231,7 +252,7 @@ export default function App() {
             onSpeed={setSpeed}
             trailSec={trailSec}
             onTrail={setTrailSec}
-            enabled={singleMatch}
+            enabled={playable}
           />
         )}
       </main>
@@ -256,6 +277,10 @@ export default function App() {
           onShowMarkers={setShowMarkers}
           markerScale={markerScale}
           onMarkerScale={setMarkerScale}
+          showPositions={showPositions}
+          onShowPositions={setShowPositions}
+          positionScale={positionScale}
+          onPositionScale={setPositionScale}
           coverage={cold}
           focusJourney={focusJourney}
           onFocusJourney={setFocusJourney}
@@ -263,6 +288,12 @@ export default function App() {
       )}
 
       <Onboarding />
+      {studioOpen && (
+        <Studio
+          manifest={manifest}
+          onClose={() => setStudioOpen(false)}
+        />
+      )}
     </div>
   )
 }

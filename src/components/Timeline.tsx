@@ -14,7 +14,7 @@ interface Props {
   onSpeed: (s: number) => void
   trailSec: number
   onTrail: (s: number) => void
-  /** true when a single match is selected — playback only makes sense then */
+  /** true when at least one match is selected */
   enabled: boolean
 }
 
@@ -28,25 +28,46 @@ export function Timeline(p: Props) {
   const last = useRef<number>(0)
 
   // Drive playback off rAF so speed is wall-clock accurate.
+  //
+  // The playhead is held in a ref as well as state so this effect depends only
+  // on whether we are playing, not on the value it produces — otherwise it tore
+  // itself down and rebuilt on every frame.
+  const headRef = useRef(playhead)
+  headRef.current = playhead
+
   useEffect(() => {
     if (!playing || !enabled) return
     last.current = performance.now()
+
     const tick = (now: number) => {
-      const dt = (now - last.current) / 1000
+      // Browsers stop firing rAF for a hidden tab. Without a clamp the first
+      // frame after it comes back carries the whole gap and teleports the
+      // playhead to the end of the match.
+      const dt = Math.min((now - last.current) / 1000, 0.1)
       last.current = now
-      const cur = playhead ?? selection.tMin
+      const cur = headRef.current ?? selection.tMin
       const next = cur + dt * p.speed
       if (next >= selection.tMax) {
         onPlayhead(selection.tMax)
         onPlaying(false)
         return
       }
+      headRef.current = next
       onPlayhead(next)
       raf.current = requestAnimationFrame(tick)
     }
+
     raf.current = requestAnimationFrame(tick)
     return () => { if (raf.current) cancelAnimationFrame(raf.current) }
-  }, [playing, playhead, p.speed, selection.tMin, selection.tMax, enabled, onPlayhead, onPlaying])
+  }, [playing, p.speed, selection.tMin, selection.tMax, enabled, onPlayhead, onPlaying])
+
+  // Resume cleanly after the tab was hidden: rAF stops there, so reset the
+  // clock on the way back rather than counting the time away as elapsed.
+  useEffect(() => {
+    const onVis = () => { if (!document.hidden) last.current = performance.now() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [])
 
   // Event-density strip: where in the match things actually happen.
   const histogram = useMemo(() => {
@@ -59,12 +80,14 @@ export function Timeline(p: Props) {
     const bin = (t: number) =>
       Math.min(BINS - 1, Math.max(0, Math.floor(((t - selection.tMin) / span) * BINS)))
 
-    const { t } = p.bundle.events
-    for (let i = 0; i < selection.positions.length; i++) traffic[bin(t[selection.positions[i]])]++
+    const { t, mi } = p.bundle.events
+    const { timeOrigin } = selection
+    const rel = (idx: number) => t[idx] - timeOrigin[mi[idx]]
+    for (let i = 0; i < selection.positions.length; i++) traffic[bin(rel(selection.positions[i]))]++
     for (const id of layerIds) {
       const idxs = selection.byLayer[id]
       if (!idxs) continue
-      for (let i = 0; i < idxs.length; i++) rows[id][bin(t[idxs[i]])]++
+      for (let i = 0; i < idxs.length; i++) rows[id][bin(rel(idxs[i]))]++
     }
     const max = (a: Float32Array) => a.reduce((m, v) => (v > m ? v : m), 0)
     return {
@@ -165,6 +188,11 @@ export function Timeline(p: Props) {
             <span>0:00</span>
             <span className="text-slate-300">
               {fmtDuration(elapsed)} <span className="text-slate-600">/ {fmtDuration(span)}</span>
+              {selection.relative && (
+                <span className="ml-2 text-sky-400/80" title="Each match is played from its own start, so several can run together">
+                  · synced from each match start
+                </span>
+              )}
             </span>
             <span>{fmtDuration(span)}</span>
           </div>

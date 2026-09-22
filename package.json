@@ -10,6 +10,8 @@
     "data": "python3 etl/build_data.py"
   },
   "dependencies": {
+    "hyparquet": "^1.31.1",
+    "hyparquet-compressors": "^1.1.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

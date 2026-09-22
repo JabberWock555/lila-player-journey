@@ -19,6 +19,8 @@ interface Props {
   pathOpacity: number
   showMarkers: boolean
   markerScale: number
+  showPositions: boolean
+  positionScale: number
   playhead: number | null
   trailSec: number
   focusJourney: number | null
@@ -47,14 +49,17 @@ export function MapView(props: Props) {
       pathOpacity: props.pathOpacity,
       showMarkers: props.showMarkers,
       markerScale: props.markerScale,
+      showPositions: props.showPositions,
+      positionScale: props.positionScale,
       playhead: props.playhead,
       trailSec: props.trailSec,
       focusJourney: props.focusJourney,
       hoverIndex: hover?.idx ?? null,
     })
   }, [bundle, selection, view, props.layers, props.mapBrightness, props.showPaths,
-      props.pathOpacity, props.showMarkers, props.markerScale, props.playhead,
-      props.trailSec, props.focusJourney, hover, tick])
+      props.pathOpacity, props.showMarkers, props.markerScale, props.showPositions,
+      props.positionScale, props.playhead, props.trailSec, props.focusJourney,
+      hover, tick])
 
   // Redraw on resize. `tick` just forces the render effect above to re-run.
   useEffect(() => {
@@ -126,7 +131,8 @@ export function MapView(props: Props) {
       setCursorWorld({ x: mx * scale + originX, z: (1 - my) * scale + originZ })
     } else setCursorWorld(null)
 
-    const idx = pickEvent(bundle, selection, cx, cy, rect.width, rect.height, view)
+    const idx = pickEvent(bundle, selection, cx, cy, rect.width, rect.height, view,
+                          12, props.showPositions)
     setHover(idx === null ? null : { idx, cx, cy })
   }
 

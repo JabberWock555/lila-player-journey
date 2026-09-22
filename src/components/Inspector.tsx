@@ -23,6 +23,10 @@ interface Props {
   onShowMarkers: (v: boolean) => void
   markerScale: number
   onMarkerScale: (v: number) => void
+  showPositions: boolean
+  onShowPositions: (v: boolean) => void
+  positionScale: number
+  onPositionScale: (v: number) => void
   coverage: { coldCells: number; playableCells: number } | null
   focusJourney: number | null
   onFocusJourney: (i: number | null) => void
@@ -158,16 +162,27 @@ export function Inspector(p: Props) {
 
       <Section title="Layers">
         <div className="space-y-2.5">
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             <Toggle on={p.showPaths} onClick={() => p.onShowPaths(!p.showPaths)}>Paths</Toggle>
-            <Toggle on={p.showMarkers} onClick={() => p.onShowMarkers(!p.showMarkers)}>Markers</Toggle>
+            <Toggle on={p.showPositions} onClick={() => p.onShowPositions(!p.showPositions)}
+                    title="Every sampled player position as a dot, coloured by human/bot">
+              Positions
+            </Toggle>
+            <Toggle on={p.showMarkers} onClick={() => p.onShowMarkers(!p.showMarkers)}
+                    title="Kill, death, loot and storm events">
+              Events
+            </Toggle>
           </div>
           {p.showPaths && (
             <Slider label="Path opacity" value={p.pathOpacity} min={0.05} max={1} step={0.05}
                     onChange={p.onPathOpacity} format={(v) => `${Math.round(v * 100)}%`} />
           )}
+          {p.showPositions && (
+            <Slider label="Position dot size" value={p.positionScale} min={0.5} max={5} step={0.25}
+                    onChange={p.onPositionScale} format={(v) => `${v}`} />
+          )}
           {p.showMarkers && (
-            <Slider label="Marker size" value={p.markerScale} min={1.5} max={8} step={0.5}
+            <Slider label="Event marker size" value={p.markerScale} min={1.5} max={8} step={0.5}
                     onChange={p.onMarkerScale} format={(v) => `${v}`} />
           )}
           <Slider label="Minimap brightness" value={p.mapBrightness} min={0.1} max={1} step={0.05}
@@ -179,6 +194,8 @@ export function Inspector(p: Props) {
         <div className="space-y-1.5 text-[10px]">
           <LegendRow color={ACTOR_COLORS.human} label="Human path" shape="line" />
           <LegendRow color={ACTOR_COLORS.bot} label="Bot path (dashed)" shape="dash" />
+          <LegendRow color={ACTOR_COLORS.human} label="Human position" shape="dot" />
+          <LegendRow color={ACTOR_COLORS.bot} label="Bot position" shape="dot" />
           {layerIds.map((id) => (
             <LegendRow
               key={id}

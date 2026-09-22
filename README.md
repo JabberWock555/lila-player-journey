@@ -23,12 +23,17 @@ dead-space detection, and per-match playback.
 | Kills, deaths, loot and storm deaths as **distinct shapes**, not just colours | ★ ✕ ◆ ▲ |
 | Filter by map, date and match | left sidebar |
 | Timeline scrubbing + playback at 1–16× with an adjustable trail | bottom bar |
+| **Multi-match playback** — select several runs and play them from their own starts | match list |
+| Match list filters: outcome, storm, min kills/loot/length, sort | sidebar → filters |
+| **Positions layer** — every sampled player location as a human/bot dot | right panel → Layers |
+| In-app map calibration and telemetry import | sidebar → + Data |
 | Heatmaps: traffic, kill zones, death zones, loot | right panel |
 | **Dead space** overlay — playable areas with zero traffic | right panel |
 | Hover any event for actor / match / time / world coords | main canvas |
 | Live world-coordinate readout for cross-checking against the editor | bottom-left |
 
-Keyboard: `Space` play/pause · `1`–`6` heatmap mode · `P`/`M` toggle paths/markers · `F` fit view.
+Keyboard: `Space` play/pause · `1`–`9` heatmap mode · `P`/`O`/`M` toggle paths/positions/events ·
+`F` fit view.
 
 ---
 
@@ -133,6 +138,24 @@ has no data, a minimap is missing, or more than 5% of rows carry a timestamp tha
 disagrees with the folder they came from. Full detail lands in
 `public/data/build-report.json`.
 
+### In the app: the data studio
+
+![Data studio — live map calibration](docs/screenshot-studio.png)
+
+The **+ Data** button opens a studio with the two jobs that used to mean editing JSON by
+hand:
+
+- **Add / calibrate map** — pick or upload a minimap, drag `scale` / `originX` / `originZ`
+  with the real recorded positions drawn live on top, hit **Fit to data** for a starting
+  point, and copy out the finished `dataset.json` block.
+- **Import telemetry** — drop `.nakama-0` files to parse them in the browser and check them
+  against the current config: event counts, unknown event types, unconfigured maps,
+  timestamp range and out-of-bounds percentage, using the same rules as the ETL.
+
+The deployed app is a static bundle with no backend, so it cannot write into the repo — the
+studio gets you the exact config text and tells you the data is valid, and the two steps
+below commit it.
+
 ### Adding a map
 
 1. Put the minimap image in `<src>/minimaps/`.
@@ -144,9 +167,17 @@ disagrees with the folder they came from. Full detail lands in
 
    This prints the map's world extents, proposes two candidate `scale`/`origin` pairs,
    and writes `calibration_NewMap.png` — a 3×3 contact sheet of the proposal and nearby
-   variants with every event overlaid. Pick the tile where paths follow roads and stay
-   inside the landmass. (`--verify-known` re-derives the three shipped maps as a
-   self-test; it lands within ~10%, which is why the visual check is the real answer.)
+   variants with every event overlaid. Pick the tile where traffic follows the roads and
+   stays inside the landmass.
+
+   ![Calibration contact sheet](docs/calibration-sheet.png)
+   *Ambrose Valley: the proposal is centre (cyan border), scale varying down the rows and
+   origin across the columns. Tiles where the data spills past the coastline or leaves a
+   margin the map does not have are wrong; the `in=` figure counts points landing inside
+   the image, which catches gross errors but not a uniform offset — hence the eyeball.*
+
+   (`--verify-known` re-derives the three shipped maps as a self-test; it lands within
+   ~10%, which is why the visual check is the real answer and not the number.)
 3. Paste the printed block into `maps` in `dataset.json`, adjusting to the tile you chose.
 4. Re-run the ETL with `--strict`.
 
@@ -192,15 +223,21 @@ INSIGHTS.md              three findings from the data, with evidence
 
 1. **Land on Ambrose Valley** (the busiest map, ~70% of the data) with the traffic heatmap on.
    Hot cores are the POIs; the faint cyan web between them is the route network.
-2. **Narrow the scope.** Click a date chip, or search a match id. Selecting a single match
-   switches the view to a bright single-path preset and enables playback.
-3. **Play it back.** `Space` or the Play button. The trail slider controls how much history
+2. **Narrow the scope.** Click a date chip, or open **filters** to narrow by outcome
+   (died / survived), storm deaths, minimum kills, loot or length, and re-sort the list.
+3. **Pick runs to watch.** Click a match to isolate it; ⌘/Ctrl-click to add more, or
+   **select all listed** to take everything the filters left. With several selected, each
+   match is rebased onto its own start so they play together rather than being strung out
+   across hours of wall clock.
+4. **Play it back.** `Space` or the Play button. The trail slider controls how much history
    stays drawn — short trail to watch movement, `full` to see the completed route.
-4. **Switch heatmap modes** (`1`–`6`) to compare where players travel, where they kill,
+5. **Switch heatmap modes** (`1`–`9`) to compare where players travel, where they kill,
    where they die, and where they loot.
-5. **Turn on Dead space** to see playable geometry that nobody touches, with a percentage
+6. **Turn on Dead space** to see playable geometry that nobody touches, with a percentage
    readout of unvisited area for the current filter.
-6. **Hover any marker** for the exact actor, match, timestamp and world coordinates, and read
-   the live `x / z` under the cursor to line the map up with the editor.
+7. **Toggle Positions** (`O`) to swap the path lines for a dot at every sampled location,
+   coloured by human/bot — the view for "where was everyone", without the connecting lines.
+8. **Hover any marker or dot** for the exact actor, match, timestamp and world coordinates,
+   and read the live `x / z` under the cursor to line the map up with the editor.
 
 Docs: [ARCHITECTURE.md](ARCHITECTURE.md) · [INSIGHTS.md](INSIGHTS.md)
