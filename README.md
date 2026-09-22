@@ -4,7 +4,7 @@ A browser tool that turns raw LILA BLACK telemetry into something a Level Design
 actually read: player paths drawn on the real minimaps, kill/death/loot/traffic heatmaps,
 dead-space detection, and per-match playback.
 
-**Live:** https://jabberwock555.github.io/lila-player-journey/
+**Live:** https://lila-black-journeys.vercel.app
 
 ![Traffic heatmap across 566 Ambrose Valley matches](docs/screenshot-traffic.png)
 *Aggregate view — traffic density across 566 matches, with kill/death/loot markers overlaid.*
@@ -37,11 +37,12 @@ Keyboard: `Space` play/pause · `1`–`6` heatmap mode · `P`/`M` toggle paths/m
 | Layer | Choice | Why |
 |---|---|---|
 | ETL | Python 3 · pyarrow · pandas · Pillow | One offline pass over the parquet files; pyarrow reads them natively despite the missing extension |
+| Config | One `dataset.json` read by both ETL and app | Maps, event types and layers are declared once; adding any of them needs no code change |
 | Data format | Packed binary (struct-of-arrays) + one JSON manifest | ~21 bytes/event vs ~120 as JSON; drops straight into TypedArrays with zero parsing |
 | Frontend | React 18 + TypeScript + Vite | Fast builds, typed data contracts, no runtime framework weight |
 | Rendering | Canvas 2D | 89k events and 800+ polylines render in a few ms; no WebGL dependency or shader maintenance |
 | Styling | Tailwind CSS | Dense, consistent dark UI without a component library |
-| Hosting | GitHub Pages (static) | No server needed — see ARCHITECTURE.md |
+| Hosting | Vercel (static) | No server needed — see ARCHITECTURE.md |
 
 There is **no backend and no database**. The whole dataset compresses to ~2.6 MB of static
 assets, so the browser loads it once and every filter, aggregation and heatmap is computed
@@ -85,12 +86,22 @@ npm run preview
 ### Deploy
 
 ```bash
+npx vercel --prod
+```
+
+`vercel.json` pins the build (`npm run build` → `dist/`) and sets caching: immutable for
+Vite's content-hashed `/assets`, short-lived-plus-revalidate for `/data` and `/maps`,
+which sit at stable paths and only change when the ETL re-runs.
+
+A GitHub Pages deploy is kept as a working fallback:
+
+```bash
 ./deploy.sh          # builds and publishes dist/ to the gh-pages branch
 ```
 
-The app is a plain static bundle, so `dist/` can be dropped on any static host
-(Vercel, Netlify, S3, nginx). `vite.config.ts` reads `BASE_PATH` for hosts that serve the
-app from a subpath; it defaults to `/` and needs no setting when served from a domain root.
+The app is a plain static bundle, so `dist/` can be dropped on any static host.
+`vite.config.ts` reads `BASE_PATH` for hosts that serve from a subpath (Pages needs
+`/lila-player-journey/`); it defaults to `/` and needs no setting on a domain root.
 
 ### Environment variables
 
@@ -98,11 +109,69 @@ app from a subpath; it defaults to `/` and needs no setting when served from a d
 
 ---
 
+## Extending the dataset
+
+Everything the ETL and the app know about maps, event types and layers lives in
+**`etl/config/dataset.json`**. Neither the Python nor the TypeScript hardcodes any of it,
+so the two cases below are config edits, not code changes.
+
+### Adding more data
+
+Drop the new day folders alongside the existing ones and re-run the ETL:
+
+```bash
+python3 etl/build_data.py --src /path/to/player_data --strict
+```
+
+Any `<MonthName>_<DD>` folder is picked up — `March_03`, `December_01`, whatever comes
+next. The year is read from the timestamps rather than assumed, so a drop from a later
+year works unchanged. Folders that aren't day folders are reported and skipped rather
+than silently ignored.
+
+`--strict` exits non-zero if a map's events fall outside its minimap, a configured map
+has no data, a minimap is missing, or more than 5% of rows carry a timestamp that
+disagrees with the folder they came from. Full detail lands in
+`public/data/build-report.json`.
+
+### Adding a map
+
+1. Put the minimap image in `<src>/minimaps/`.
+2. Find its world footprint:
+
+   ```bash
+   python3 etl/calibrate_map.py --map NewMap --src /path/to/player_data
+   ```
+
+   This prints the map's world extents, proposes two candidate `scale`/`origin` pairs,
+   and writes `calibration_NewMap.png` — a 3×3 contact sheet of the proposal and nearby
+   variants with every event overlaid. Pick the tile where paths follow roads and stay
+   inside the landmass. (`--verify-known` re-derives the three shipped maps as a
+   self-test; it lands within ~10%, which is why the visual check is the real answer.)
+3. Paste the printed block into `maps` in `dataset.json`, adjusting to the tile you chose.
+4. Re-run the ETL with `--strict`.
+
+The map picker, filters and heatmaps are all driven by the manifest, so the new map
+appears in the UI with no frontend change.
+
+### Adding an event type
+
+Append it to `events` in `dataset.json` and give its `layer` an entry in `layers`
+(label, badge, colour, marker shape, heatmap ramp). The UI grows a filter toggle, a stat
+tile, a heatmap mode, a timeline series and a legend row automatically.
+
+**Append only — never reorder or remove.** An event's position in that list *is* its
+wire format: the `.bin` files store it as a `uint8`. The ETL refuses to build if the list
+stops being a superset of the previously built manifest.
+
+---
+
 ## Project layout
 
 ```
 etl/build_data.py        parquet -> binary + manifest + downscaled minimaps
-public/data/             manifest.json, AmbroseValley.bin, GrandRift.bin, Lockdown.bin
+etl/calibrate_map.py     propose scale/origin for a new map + contact sheet
+etl/config/dataset.json  maps, event types, layers — the single source of truth
+public/data/             manifest.json, build-report.json, <Map>.bin
 public/maps/             minimaps downscaled to 2048px webp
 src/lib/
   types.ts               data contracts shared with the ETL
@@ -111,7 +180,8 @@ src/lib/
   heatmap.ts             density grids, blur, colour ramps, dead-space detection
   render.ts              canvas renderer + world<->screen projection
 src/components/          MapView, Sidebar, Inspector, Timeline, Onboarding
-deploy.sh                build + publish to gh-pages
+vercel.json              build + cache headers for the Vercel deploy
+deploy.sh                build + publish to gh-pages (fallback host)
 ARCHITECTURE.md          design decisions, coordinate mapping, trade-offs
 INSIGHTS.md              three findings from the data, with evidence
 ```

@@ -8,19 +8,26 @@
  * the minimap, which gives smooth falloff without per-point compositing.
  */
 
-export type Ramp = 'traffic' | 'kill' | 'death' | 'loot' | 'storm'
+/** A colour ramp is a list of hex stops, dark -> hot, from dataset.json. */
+export type Ramp = string[]
 
-const RAMPS: Record<Ramp, [number, number, number][]> = {
-  // dark blue -> cyan -> lime -> amber -> white
-  traffic: [[8, 20, 60], [16, 90, 160], [30, 190, 190], [150, 230, 90], [255, 220, 90], [255, 255, 245]],
-  // deep red -> orange -> white hot
-  kill: [[40, 0, 10], [130, 10, 40], [220, 40, 60], [255, 130, 60], [255, 230, 160], [255, 255, 255]],
-  // violet -> magenta -> pale
-  death: [[24, 6, 44], [78, 20, 120], [150, 44, 190], [214, 100, 224], [244, 190, 250], [255, 255, 255]],
-  // dark green -> lime -> pale
-  loot: [[4, 30, 16], [12, 84, 44], [30, 150, 70], [110, 210, 90], [200, 245, 150], [255, 255, 235]],
-  // brown -> yellow -> white
-  storm: [[40, 30, 0], [110, 84, 6], [190, 150, 20], [235, 200, 60], [250, 235, 160], [255, 255, 255]],
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '')
+  const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+const rampCache = new Map<string, [number, number, number][]>()
+
+/** Hex stops -> RGB triples, memoised since ramps are stable per session. */
+function rgbStops(ramp: Ramp): [number, number, number][] {
+  const key = ramp.join(',')
+  let hit = rampCache.get(key)
+  if (!hit) {
+    hit = ramp.length ? ramp.map(hexToRgb) : [[0, 0, 0], [255, 255, 255]]
+    rampCache.set(key, hit)
+  }
+  return hit
 }
 
 function sample(ramp: [number, number, number][], t: number): [number, number, number] {
@@ -76,6 +83,7 @@ export interface HeatOptions {
   clip?: number
   /** gamma < 1 lifts low-density areas so faint traffic stays visible */
   gamma?: number
+  /** colour stops; defaults to greyscale if omitted */
   ramp?: Ramp
   /** hide cells below this fraction of max, so empty map stays transparent */
   floor?: number
@@ -106,7 +114,7 @@ export function buildHeatmap(
   const gamma = opts.gamma ?? 0.55
   const floor = opts.floor ?? 0.04
   const opacity = opts.opacity ?? 1
-  const ramp = RAMPS[opts.ramp ?? 'traffic']
+  const ramp = rgbStops(opts.ramp ?? [])
 
   const grid = new Float32Array(size * size)
   for (let i = 0; i < count; i++) {

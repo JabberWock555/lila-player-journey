@@ -1,4 +1,4 @@
-import type { Manifest, MapBundle, MapEvents, MapMeta } from './types'
+import type { DatasetConfig, Manifest, MapBundle, MapEvents, MapMeta } from './types'
 
 const BASE = import.meta.env.BASE_URL
 
@@ -65,7 +65,7 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 
 const cache = new Map<string, Promise<MapBundle>>()
 
-export function loadMap(meta: MapMeta): Promise<MapBundle> {
+export function loadMap(meta: MapMeta, config: DatasetConfig): Promise<MapBundle> {
   const hit = cache.get(meta.id)
   if (hit) return hit
 
@@ -77,7 +77,7 @@ export function loadMap(meta: MapMeta): Promise<MapBundle> {
       }),
       loadImage(`${BASE}${meta.image}`),
     ])
-    return { meta, events: decode(buf, meta), image }
+    return { meta, events: decode(buf, meta), image, config }
   })()
 
   cache.set(meta.id, task)

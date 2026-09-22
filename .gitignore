@@ -4,3 +4,5 @@ dist
 *.log
 .vercel
 tsconfig.tsbuildinfo
+.env*
+__pycache__/

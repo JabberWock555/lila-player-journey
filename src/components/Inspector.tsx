@@ -1,6 +1,6 @@
-import type { MapBundle, Layer } from '../lib/types'
+import type { MapBundle } from '../lib/types'
 import type { Selection } from '../lib/select'
-import { LAYER_COLORS, ACTOR_COLORS } from '../lib/render'
+import { ACTOR_COLORS } from '../lib/render'
 import { Section, Slider, Stat, Toggle, fmtDuration, fmtNum, shortId } from './ui'
 import type { HeatMode } from '../App'
 
@@ -28,18 +28,23 @@ interface Props {
   onFocusJourney: (i: number | null) => void
 }
 
-const HEAT_MODES: { id: HeatMode; label: string; hint: string }[] = [
-  { id: 'none', label: 'Off', hint: 'No density overlay' },
-  { id: 'traffic', label: 'Traffic', hint: 'Where players spend time' },
-  { id: 'kill', label: 'Kill zones', hint: 'Where players get kills' },
-  { id: 'death', label: 'Death zones', hint: 'Where players die' },
-  { id: 'loot', label: 'Loot', hint: 'Where players pick items up' },
-  { id: 'cold', label: 'Dead space', hint: 'Playable areas nobody visits' },
-]
-
 export function Inspector(p: Props) {
   const { selection, bundle } = p
   const s = selection.stats
+  const { layers, layerIds } = bundle.config
+
+  // Heatmap modes: the two structural ones plus one per configured layer, so a
+  // new layer in dataset.json gets its own density view for free.
+  const heatModes: { id: HeatMode; label: string; hint: string }[] = [
+    { id: 'none', label: 'Off', hint: 'No density overlay' },
+    { id: 'traffic', label: 'Traffic', hint: 'Where players spend time' },
+    ...layerIds.map((id) => ({
+      id: id as HeatMode,
+      label: layers[id].heatLabel,
+      hint: layers[id].heatHint,
+    })),
+    { id: 'cold', label: 'Dead space', hint: 'Playable areas nobody visits' },
+  ]
 
   const singleMatch = s.matches === 1
   const match = singleMatch
@@ -55,10 +60,10 @@ export function Inspector(p: Props) {
                 hint={`${s.humanJourneys}H · ${s.botJourneys}B`} />
           <Stat label="Events" value={fmtNum(s.events)} />
           <Stat label="Median run" value={fmtDuration(s.medianDurationSec)} />
-          <Stat label="Kills" value={fmtNum(s.kills)} accent={LAYER_COLORS.kill} />
-          <Stat label="Deaths" value={fmtNum(s.deaths)} accent={LAYER_COLORS.death} />
-          <Stat label="Loot" value={fmtNum(s.loot)} accent={LAYER_COLORS.loot} />
-          <Stat label="Storm" value={fmtNum(s.storm)} accent={LAYER_COLORS.storm} />
+          {layerIds.map((id) => (
+            <Stat key={id} label={layers[id].label}
+                  value={fmtNum(s.byLayer[id] ?? 0)} accent={layers[id].color} />
+          ))}
         </div>
         {s.humanJourneys > 0 && (
           <div className="mt-1.5 panel px-2.5 py-2">
@@ -66,7 +71,7 @@ export function Inspector(p: Props) {
             <div className="flex items-center gap-2 mt-1">
               <div className="flex-1 h-1.5 rounded-full bg-ink-900 overflow-hidden">
                 <div className="h-full rounded-full"
-                     style={{ width: `${s.deathRate * 100}%`, background: LAYER_COLORS.death }} />
+                     style={{ width: `${s.deathRate * 100}%`, background: layers.death?.color ?? '#a855f7' }} />
               </div>
               <span className="num text-xs text-slate-300">{(s.deathRate * 100).toFixed(0)}%</span>
             </div>
@@ -119,7 +124,7 @@ export function Inspector(p: Props) {
 
       <Section title="Heatmap">
         <div className="grid grid-cols-3 gap-1">
-          {HEAT_MODES.map((m) => (
+          {heatModes.map((m) => (
             <button
               key={m.id}
               onClick={() => p.onHeatMode(m.id)}
@@ -174,12 +179,12 @@ export function Inspector(p: Props) {
         <div className="space-y-1.5 text-[10px]">
           <LegendRow color={ACTOR_COLORS.human} label="Human path" shape="line" />
           <LegendRow color={ACTOR_COLORS.bot} label="Bot path (dashed)" shape="dash" />
-          {(['kill', 'death', 'loot', 'storm'] as Layer[]).map((l) => (
+          {layerIds.map((id) => (
             <LegendRow
-              key={l}
-              color={LAYER_COLORS[l]}
-              label={{ kill: 'Kill (★)', death: 'Death (✕)', loot: 'Loot (◆)', storm: 'Storm death (▲)' }[l]}
-              shape={l}
+              key={id}
+              color={layers[id].color}
+              label={`${layers[id].label} (${GLYPH[layers[id].marker] ?? '●'})`}
+              shape={layers[id].marker}
             />
           ))}
         </div>
@@ -197,6 +202,11 @@ function Row({ k, v, color }: { k: string; v: string; color?: string }) {
   )
 }
 
+/** Text stand-ins for the canvas marker shapes, used in the legend. */
+const GLYPH: Record<string, string> = {
+  star: '★', cross: '✕', diamond: '◆', triangle: '▲', dot: '●',
+}
+
 function LegendRow({ color, label, shape }: { color: string; label: string; shape: string }) {
   return (
     <div className="flex items-center gap-2 text-slate-400">
@@ -206,10 +216,9 @@ function LegendRow({ color, label, shape }: { color: string; label: string; shap
           <span className="block w-5 h-[2px] rounded"
                 style={{ backgroundImage: `repeating-linear-gradient(90deg, ${color} 0 4px, transparent 4px 7px)` }} />
         )}
-        {shape === 'kill' && <span style={{ color }}>★</span>}
-        {shape === 'death' && <span style={{ color }}>✕</span>}
-        {shape === 'loot' && <span style={{ color }}>◆</span>}
-        {shape === 'storm' && <span style={{ color }}>▲</span>}
+        {shape !== 'line' && shape !== 'dash' && (
+          <span style={{ color }}>{GLYPH[shape] ?? '●'}</span>
+        )}
       </span>
       {label}
     </div>

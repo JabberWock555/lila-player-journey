@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { Manifest, MapMeta, Layer } from '../lib/types'
 import type { Filters } from '../lib/select'
-import { LAYER_COLORS, ACTOR_COLORS } from '../lib/render'
+import { ACTOR_COLORS } from '../lib/render'
 import { Section, Toggle, fmtDuration, fmtNum, shortId } from './ui'
 
 interface Props {
@@ -11,10 +11,6 @@ interface Props {
   filters: Filters
   onFilters: (f: Filters) => void
   loading: boolean
-}
-
-const LAYER_LABEL: Record<Layer, string> = {
-  kill: 'Kills', death: 'Deaths', loot: 'Loot', storm: 'Storm',
 }
 
 export function Sidebar({ manifest, map, onMap, filters, onFilters, loading }: Props) {
@@ -126,14 +122,16 @@ export function Sidebar({ manifest, map, onMap, filters, onFilters, loading }: P
           </Toggle>
         </div>
         <div className="flex flex-wrap gap-1">
-          {(Object.keys(LAYER_LABEL) as Layer[]).map((layer) => (
+          {(Object.keys(manifest.layers) as Layer[]).map((layer) => (
             <Toggle
               key={layer}
-              on={filters.layers[layer]}
-              dot={LAYER_COLORS[layer]}
-              onClick={() => patch({ layers: { ...filters.layers, [layer]: !filters.layers[layer] } })}
+              on={filters.layers[layer] !== false}
+              dot={manifest.layers[layer].color}
+              onClick={() => patch({
+                layers: { ...filters.layers, [layer]: filters.layers[layer] === false },
+              })}
             >
-              {LAYER_LABEL[layer]}
+              {manifest.layers[layer].label}
             </Toggle>
           ))}
         </div>
@@ -187,9 +185,16 @@ export function Sidebar({ manifest, map, onMap, filters, onFilters, loading }: P
                   <span>{m.day.slice(5)}</span>
                   <span className="text-human">{m.humans}H</span>
                   <span className="text-bot">{m.bots}B</span>
-                  {m.kills > 0 && <span style={{ color: LAYER_COLORS.kill }}>{m.kills}K</span>}
-                  {m.loot > 0 && <span style={{ color: LAYER_COLORS.loot }}>{m.loot}L</span>}
-                  {m.storm > 0 && <span style={{ color: LAYER_COLORS.storm }}>storm</span>}
+                  {(Object.keys(manifest.layers) as Layer[]).map((layer) => {
+                    const count = m.layers?.[layer] ?? 0
+                    if (!count) return null
+                    const def = manifest.layers[layer]
+                    return (
+                      <span key={layer} style={{ color: def.color }} title={def.label}>
+                        {count}{def.badge}
+                      </span>
+                    )
+                  })}
                 </div>
               </button>
             )

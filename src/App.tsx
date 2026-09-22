@@ -1,19 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { loadManifest, loadMap } from './lib/data'
-import { buildColdmap, buildHeatmap, type Ramp } from './lib/heatmap'
+import { buildColdmap, buildHeatmap } from './lib/heatmap'
 import { defaultFilters, gatherUV, selectEvents, type Filters } from './lib/select'
 import { IDENTITY_VIEW, type View } from './lib/render'
-import type { Manifest, MapBundle } from './lib/types'
+import { buildDatasetConfig, type DatasetConfig, type Manifest, type MapBundle } from './lib/types'
 import { MapView } from './components/MapView'
 import { Sidebar } from './components/Sidebar'
 import { Inspector } from './components/Inspector'
 import { Timeline } from './components/Timeline'
 import { Onboarding } from './components/Onboarding'
 
-export type HeatMode = 'none' | 'traffic' | 'kill' | 'death' | 'loot' | 'cold'
+/** 'none' | 'traffic' | 'cold' are structural; anything else is a layer id. */
+export type HeatMode = string
 
 export default function App() {
   const [manifest, setManifest] = useState<Manifest | null>(null)
+  const [config, setConfig] = useState<DatasetConfig | null>(null)
   const [mapId, setMapId] = useState<string | null>(null)
   const [bundle, setBundle] = useState<MapBundle | null>(null)
   const [loading, setLoading] = useState(true)
@@ -42,6 +44,9 @@ export default function App() {
     loadManifest()
       .then((m) => {
         setManifest(m)
+        const cfg = buildDatasetConfig(m)
+        setConfig(cfg)
+        setFilters(defaultFilters(cfg.layerIds))
         // Default to the map with the most data.
         const biggest = [...m.maps].sort((a, b) => b.count - a.count)[0]
         setMapId(biggest.id)
@@ -55,10 +60,10 @@ export default function App() {
   )
 
   useEffect(() => {
-    if (!mapMeta) return
+    if (!mapMeta || !config) return
     setLoading(true)
     setBundle(null)
-    loadMap(mapMeta)
+    loadMap(mapMeta, config)
       .then((b) => {
         setBundle(b)
         setLoading(false)
@@ -70,7 +75,7 @@ export default function App() {
         }
       })
       .catch((e) => { setError(String(e)); setLoading(false) })
-  }, [mapMeta])
+  }, [mapMeta, config])
 
   // --- derived ------------------------------------------------------------
   const selection = useMemo(
@@ -105,14 +110,14 @@ export default function App() {
 
   const heat = useMemo(() => {
     if (!bundle || !selection || heatMode === 'none' || heatMode === 'cold') return null
-    const src = heatMode === 'traffic' ? selection.positions : selection.byLayer[heatMode]
-    if (!src.length) return null
+    const sparse = heatMode !== 'traffic'
+    const src = sparse ? selection.byLayer[heatMode] : selection.positions
+    if (!src?.length) return null
     const { u, v, n } = gatherUV(bundle, src)
     // Discrete events are far sparser than position samples, so they need a
     // wider kernel and a lower clip to read as a field rather than confetti.
-    const sparse = heatMode !== 'traffic'
     return buildHeatmap(u, v, n, {
-      ramp: heatMode as Ramp,
+      ramp: sparse ? bundle.config.layers[heatMode]?.ramp : bundle.config.trafficRamp,
       radius: sparse ? heatRadius + 3 : heatRadius,
       clip: sparse ? 0.97 : 0.99,
       gamma: sparse ? 0.62 : 0.55,
@@ -134,20 +139,21 @@ export default function App() {
       if (e.key === 'f') setView(IDENTITY_VIEW)
       if (e.key === 'p') setShowPaths((v) => !v)
       if (e.key === 'm') setShowMarkers((v) => !v)
-      if (e.key >= '1' && e.key <= '6') {
-        const modes: HeatMode[] = ['none', 'traffic', 'kill', 'death', 'loot', 'cold']
-        setHeatMode(modes[Number(e.key) - 1])
+      if (e.key >= '1' && e.key <= '9' && config) {
+        const modes: HeatMode[] = ['none', 'traffic', ...config.layerIds, 'cold']
+        const pick = modes[Number(e.key) - 1]
+        if (pick) setHeatMode(pick)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [singleMatch])
+  }, [singleMatch, config])
 
   const handleMap = useCallback((id: string) => {
     setMapId(id)
-    setFilters({ ...defaultFilters() })
+    setFilters(defaultFilters(config?.layerIds ?? []))
     setView(IDENTITY_VIEW)
-  }, [])
+  }, [config])
 
   if (error) {
     return (
@@ -160,7 +166,7 @@ export default function App() {
     )
   }
 
-  if (!manifest || !mapMeta) {
+  if (!manifest || !mapMeta || !config) {
     return (
       <div className="h-full grid place-items-center">
         <p className="text-sm text-slate-500 animate-pulse">Loading telemetry…</p>

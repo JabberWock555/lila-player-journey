@@ -3,7 +3,7 @@ import type { MapBundle } from '../lib/types'
 import type { Selection } from '../lib/select'
 import { describeEvent } from '../lib/select'
 import {
-  canvasToMap, mapRect, pickEvent, render, LAYER_COLORS,
+  canvasToMap, mapRect, pickEvent, render,
   type RenderLayers, type View,
 } from '../lib/render'
 import { fmtClock, shortId } from './ui'
@@ -183,14 +183,7 @@ export function MapView(props: Props) {
           }}
         >
           <div className="flex items-center gap-1.5 font-semibold text-white">
-            <span
-              className="w-2 h-2 rounded-full"
-              style={{
-                background: info.isKill ? LAYER_COLORS.kill
-                  : info.name === 'KilledByStorm' ? LAYER_COLORS.storm
-                  : info.isDeath ? LAYER_COLORS.death : LAYER_COLORS.loot,
-              }}
-            />
+            <span className="w-2 h-2 rounded-full" style={{ background: info.color }} />
             {info.name}
           </div>
           <dl className="mt-1.5 space-y-0.5 text-slate-400">

@@ -1,0 +1,56 @@
+{
+  "generatedAt": "2026-09-22T15:35:47+00:00",
+  "dayFolders": [
+    "February_10",
+    "February_11",
+    "February_12",
+    "February_13",
+    "February_14"
+  ],
+  "filesRead": 1243,
+  "filesSkipped": 0,
+  "unknownEventTypes": [],
+  "timestampFolderMismatch": 0.0,
+  "years": [
+    2026
+  ],
+  "unmappedMapIds": [],
+  "outOfBounds": 0.0,
+  "outOfBoundsByMap": {
+    "AmbroseValley": 0.0,
+    "GrandRift": 0.0,
+    "Lockdown": 0.0
+  },
+  "droppedDuplicatePositions": 210,
+  "missingMinimaps": [],
+  "eventsByMap": {
+    "AmbroseValley": 60840,
+    "GrandRift": 6853,
+    "Lockdown": 21201
+  },
+  "totals": {
+    "events": 88894,
+    "matches": 796,
+    "players": 245,
+    "bots": 94,
+    "days": [
+      "2026-02-09",
+      "2026-02-10",
+      "2026-02-11",
+      "2026-02-12",
+      "2026-02-13",
+      "2026-02-14"
+    ],
+    "eventCounts": {
+      "Position": 51137,
+      "BotPosition": 21712,
+      "Loot": 12885,
+      "BotKill": 2415,
+      "BotKilled": 700,
+      "KilledByStorm": 39,
+      "Kill": 3,
+      "Killed": 3
+    },
+    "medianSessionSec": 367
+  }
+}

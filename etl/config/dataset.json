@@ -1,0 +1,98 @@
+{
+  "_README": [
+    "Single source of truth for maps, event types and semantic layers.",
+    "Both the ETL (etl/build_data.py) and the frontend read from here — the frontend",
+    "via the `events` and `layers` blocks copied into public/data/manifest.json.",
+    "",
+    "ADDING A MAP: add an entry to `maps` and drop its minimap into <src>/minimaps/.",
+    "  Use `python3 etl/calibrate_map.py --map <Name>` to find scale/originX/originZ,",
+    "  then re-run the ETL. No code changes are needed.",
+    "",
+    "ADDING AN EVENT TYPE: APPEND to `events`. Never reorder or remove entries.",
+    "  The position of an event in this list IS its wire format: the .bin files store",
+    "  that index as a uint8. Reordering silently reinterprets every archived file.",
+    "  build_data.py enforces this by checking the previous manifest's eventTypes is",
+    "  still a prefix of this list, and aborts if not.",
+    "",
+    "`layer` buckets an event for the UI (colour, marker shape, heatmap, filters).",
+    "  null means the event is a position sample and is drawn as a path, not a marker."
+  ],
+
+  "minimapMaxPx": 2048,
+
+  "maps": {
+    "AmbroseValley": {
+      "label": "Ambrose Valley",
+      "scale": 900,
+      "originX": -370,
+      "originZ": -473,
+      "source": "AmbroseValley_Minimap.png"
+    },
+    "GrandRift": {
+      "label": "Grand Rift",
+      "scale": 581,
+      "originX": -290,
+      "originZ": -290,
+      "source": "GrandRift_Minimap.png"
+    },
+    "Lockdown": {
+      "label": "Lockdown",
+      "scale": 1000,
+      "originX": -500,
+      "originZ": -500,
+      "source": "Lockdown_Minimap.jpg"
+    }
+  },
+
+  "events": [
+    { "name": "Position",      "layer": null },
+    { "name": "BotPosition",   "layer": null },
+    { "name": "Loot",          "layer": "loot" },
+    { "name": "Kill",          "layer": "kill" },
+    { "name": "Killed",        "layer": "death" },
+    { "name": "BotKill",       "layer": "kill" },
+    { "name": "BotKilled",     "layer": "death" },
+    { "name": "KilledByStorm", "layer": "storm" }
+  ],
+
+  "layers": {
+    "kill": {
+      "label": "Kills",
+      "badge": "K",
+      "color": "#f43f5e",
+      "marker": "star",
+      "heatLabel": "Kill zones",
+      "heatHint": "Where players get kills",
+      "ramp": ["#28000a", "#820a28", "#dc283c", "#ff823c", "#ffe6a0", "#ffffff"]
+    },
+    "death": {
+      "label": "Deaths",
+      "badge": "D",
+      "color": "#a855f7",
+      "marker": "cross",
+      "heatLabel": "Death zones",
+      "heatHint": "Where players die",
+      "ramp": ["#18062c", "#4e1478", "#962cbe", "#d664e0", "#f4befa", "#ffffff"]
+    },
+    "loot": {
+      "label": "Loot",
+      "badge": "L",
+      "color": "#22c55e",
+      "marker": "diamond",
+      "heatLabel": "Loot",
+      "heatHint": "Where players pick items up",
+      "ramp": ["#041e10", "#0c542c", "#1e9646", "#6ed25a", "#c8f596", "#ffffeb"]
+    },
+    "storm": {
+      "label": "Storm",
+      "badge": "S",
+      "color": "#eab308",
+      "marker": "triangle",
+      "heatLabel": "Storm",
+      "heatHint": "Where the storm kills players",
+      "ramp": ["#281e00", "#6e5406", "#be9614", "#ebc83c", "#faeba0", "#ffffff"]
+    }
+  },
+
+  "trafficRamp": ["#08143c", "#105aa0", "#1ebebe", "#96e65a", "#ffdc5a", "#fffff5"]
+}

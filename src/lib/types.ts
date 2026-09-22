@@ -1,31 +1,34 @@
-/** Shapes emitted by etl/build_data.py. Keep in sync with that script. */
+/**
+ * Data contracts shared with etl/build_data.py.
+ *
+ * Nothing about event types or layers is hardcoded here — the ETL copies
+ * `etl/config/dataset.json` into the manifest, and `buildDatasetConfig` below
+ * turns it into the lookups the render/selection code uses. Adding an event
+ * type or a layer is therefore a config change, not a code change.
+ */
 
-export const EVENT_TYPES = [
-  'Position', 'BotPosition', 'Loot',
-  'Kill', 'Killed', 'BotKill', 'BotKilled', 'KilledByStorm',
-] as const
+/** A semantic bucket an event belongs to ("kill", "death", "loot", "storm", …). */
+export type Layer = string
 
-export type EventName = (typeof EVENT_TYPES)[number]
+/** Marker glyphs `render.ts` knows how to draw. Unknown values fall back to a dot. */
+export type MarkerShape = 'star' | 'cross' | 'diamond' | 'triangle' | 'dot'
 
-/** Codes stored in the `ev` column of the binary. */
-export const EV = Object.fromEntries(
-  EVENT_TYPES.map((n, i) => [n, i]),
-) as Record<EventName, number>
+export interface EventDef {
+  name: string
+  /** null for position samples, which are drawn as paths rather than markers */
+  layer: Layer | null
+}
 
-export const POSITION_CODES = new Set([EV.Position, EV.BotPosition])
-export const KILL_CODES = new Set([EV.Kill, EV.BotKill])
-export const DEATH_CODES = new Set([EV.Killed, EV.BotKilled, EV.KilledByStorm])
-
-/** Semantic buckets the UI filters and colours by. */
-export type Layer = 'kill' | 'death' | 'loot' | 'storm'
-
-export const LAYER_OF_CODE: Record<number, Layer> = {
-  [EV.Kill]: 'kill',
-  [EV.BotKill]: 'kill',
-  [EV.Killed]: 'death',
-  [EV.BotKilled]: 'death',
-  [EV.KilledByStorm]: 'storm',
-  [EV.Loot]: 'loot',
+export interface LayerDef {
+  label: string
+  /** one-letter suffix used in the compact match list */
+  badge: string
+  color: string
+  marker: MarkerShape
+  heatLabel: string
+  heatHint: string
+  /** colour ramp for this layer's heatmap, dark → hot */
+  ramp: string[]
 }
 
 export interface MatchMeta {
@@ -36,10 +39,8 @@ export interface MatchMeta {
   humans: number
   bots: number
   events: number
-  kills: number
-  deaths: number
-  loot: number
-  storm: number
+  /** per-layer event counts; absent layers mean zero */
+  layers: Record<Layer, number>
 }
 
 export interface JourneyMeta {
@@ -49,10 +50,7 @@ export interface JourneyMeta {
   /** number of events */ n: number
   t0: number
   t1: number
-  loot: number
-  kills: number
-  died: number
-  storm: number
+  /** 1 if this journey ends in a death of any kind */ died: number
 }
 
 export interface PlayerMeta {
@@ -78,7 +76,10 @@ export interface MapMeta {
 
 export interface Manifest {
   generatedAt: string
-  eventTypes: EventName[]
+  eventTypes: string[]
+  events: EventDef[]
+  layers: Record<Layer, LayerDef>
+  trafficRamp: string[]
   maps: MapMeta[]
   totals: {
     events: number
@@ -106,8 +107,48 @@ export interface MapEvents {
   v: Float32Array
 }
 
+/**
+ * Manifest config flattened into the lookups the hot paths need. Built once per
+ * session; the `ev` column in the binary indexes straight into `layerOfCode`.
+ */
+export interface DatasetConfig {
+  eventTypes: string[]
+  /** event code -> layer id, or null for position samples */
+  layerOfCode: (Layer | null)[]
+  /** event codes that are position samples */
+  positionCodes: Set<number>
+  /** ordered layer ids, as declared in the config */
+  layerIds: Layer[]
+  layers: Record<Layer, LayerDef>
+  trafficRamp: string[]
+  /** convenience: layer id -> colour */
+  colorOf: Record<Layer, string>
+}
+
+export function buildDatasetConfig(m: Manifest): DatasetConfig {
+  const layerOfCode = m.events.map((e) => e.layer ?? null)
+  const positionCodes = new Set<number>()
+  layerOfCode.forEach((layer, code) => {
+    if (layer === null) positionCodes.add(code)
+  })
+  const layerIds = Object.keys(m.layers)
+  const colorOf: Record<Layer, string> = {}
+  for (const id of layerIds) colorOf[id] = m.layers[id].color
+
+  return {
+    eventTypes: m.eventTypes,
+    layerOfCode,
+    positionCodes,
+    layerIds,
+    layers: m.layers,
+    trafficRamp: m.trafficRamp,
+    colorOf,
+  }
+}
+
 export interface MapBundle {
   meta: MapMeta
   events: MapEvents
   image: HTMLImageElement
+  config: DatasetConfig
 }

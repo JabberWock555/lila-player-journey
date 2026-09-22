@@ -11,7 +11,7 @@
  * canvas, so every layer stays registered no matter how the user navigates.
  */
 
-import type { Layer, MapBundle } from './types'
+import type { MapBundle, MarkerShape } from './types'
 import type { Selection } from './select'
 
 export interface View {
@@ -24,13 +24,7 @@ export interface View {
 
 export const IDENTITY_VIEW: View = { zoom: 1, panX: 0, panY: 0 }
 
-export const LAYER_COLORS: Record<Layer, string> = {
-  kill: '#f43f5e',
-  death: '#a855f7',
-  loot: '#22c55e',
-  storm: '#eab308',
-}
-
+/** Actor colours are structural (human vs bot), not per-layer, so they stay here. */
 export const ACTOR_COLORS = { human: '#38bdf8', bot: '#f59e0b' }
 
 /** Square of canvas pixels the unit map square occupies, given the view. */
@@ -109,7 +103,8 @@ export function render(canvas: HTMLCanvasElement, o: RenderOpts) {
     ctx.globalCompositeOperation = 'source-over'
   }
 
-  const { events, meta } = o.bundle
+  const { events, meta, config } = o.bundle
+  const isPos = (code: number) => config.positionCodes.has(code)
   const inWindow = (t: number) =>
     o.playhead === null || (t <= o.playhead && t >= o.playhead - o.trailSec)
 
@@ -136,8 +131,7 @@ export function render(canvas: HTMLCanvasElement, o: RenderOpts) {
       let lastT = -Infinity
       for (let i = 0; i < j.n; i++) {
         const idx = j.o + i
-        const code = events.ev[idx]
-        if (code > 1) continue // positions are codes 0 and 1
+        if (!isPos(events.ev[idx])) continue
         const t = events.t[idx]
         if (!inWindow(t)) {
           drawing = false
@@ -158,7 +152,7 @@ export function render(canvas: HTMLCanvasElement, o: RenderOpts) {
         let headIdx = -1
         for (let i = j.n - 1; i >= 0; i--) {
           const idx = j.o + i
-          if (events.ev[idx] > 1) continue
+          if (!isPos(events.ev[idx])) continue
           if (events.t[idx] <= o.playhead) { headIdx = idx; break }
         }
         if (headIdx >= 0 && events.t[headIdx] >= o.playhead - o.trailSec) {
@@ -181,17 +175,23 @@ export function render(canvas: HTMLCanvasElement, o: RenderOpts) {
 
   // --- discrete event markers --------------------------------------------
   if (o.showMarkers) {
-    const order: Layer[] = ['loot', 'kill', 'death', 'storm']
+    // Draw densest layers first so rarer, more important events land on top.
+    const order = [...o.bundle.config.layerIds].sort(
+      (a, b) => (o.selection.byLayer[b]?.length ?? 0) - (o.selection.byLayer[a]?.length ?? 0),
+    )
     for (const layer of order) {
       const idxs = o.selection.byLayer[layer]
-      ctx.fillStyle = LAYER_COLORS[layer]
-      ctx.strokeStyle = LAYER_COLORS[layer]
+      if (!idxs?.length) continue
+      const def = o.bundle.config.layers[layer]
+      ctx.fillStyle = def?.color ?? '#94a3b8'
+      ctx.strokeStyle = def?.color ?? '#94a3b8'
+      const shape = def?.marker ?? 'dot'
       for (let i = 0; i < idxs.length; i++) {
         const idx = idxs[i]
         if (!inWindow(events.t[idx])) continue
         const [cx, cy] = mapToCanvas(events.u[idx], 1 - events.v[idx], r)
         if (cx < -20 || cy < -20 || cx > width + 20 || cy > height + 20) continue
-        drawMarker(ctx, layer, cx, cy, o.markerScale)
+        drawMarker(ctx, shape, cx, cy, o.markerScale)
       }
     }
   }
@@ -217,12 +217,13 @@ export function render(canvas: HTMLCanvasElement, o: RenderOpts) {
 
 /**
  * Each layer gets a distinct *shape* as well as a distinct colour, so the map
- * stays readable in greyscale and when markers overlap.
- *   kill  = 4-point star   death = X      loot = diamond   storm = triangle
+ * stays readable in greyscale and when markers overlap. Shapes come from
+ * `marker` in dataset.json; an unrecognised value falls back to a dot so a
+ * newly configured layer is always visible rather than silently missing.
  */
 function drawMarker(
   ctx: CanvasRenderingContext2D,
-  layer: Layer,
+  shape: MarkerShape,
   cx: number,
   cy: number,
   scale: number,
@@ -233,8 +234,8 @@ function drawMarker(
   ctx.globalAlpha = 0.92
   ctx.lineWidth = Math.max(1, s * 0.34)
 
-  switch (layer) {
-    case 'kill': {
+  switch (shape) {
+    case 'star': {
       ctx.beginPath()
       for (let i = 0; i < 8; i++) {
         const a = (Math.PI / 4) * i - Math.PI / 2
@@ -247,7 +248,7 @@ function drawMarker(
       ctx.fill()
       break
     }
-    case 'death': {
+    case 'cross': {
       const d = s * 1.05
       ctx.beginPath()
       ctx.moveTo(-d, -d); ctx.lineTo(d, d)
@@ -255,7 +256,7 @@ function drawMarker(
       ctx.stroke()
       break
     }
-    case 'loot': {
+    case 'diamond': {
       const d = s * 0.95
       ctx.beginPath()
       ctx.moveTo(0, -d); ctx.lineTo(d, 0); ctx.lineTo(0, d); ctx.lineTo(-d, 0)
@@ -263,13 +264,18 @@ function drawMarker(
       ctx.fill()
       break
     }
-    case 'storm': {
+    case 'triangle': {
       const d = s * 1.15
       ctx.beginPath()
       ctx.moveTo(0, -d); ctx.lineTo(d * 0.92, d * 0.72); ctx.lineTo(-d * 0.92, d * 0.72)
       ctx.closePath()
       ctx.fill()
       break
+    }
+    default: {
+      ctx.beginPath()
+      ctx.arc(0, 0, s * 0.9, 0, Math.PI * 2)
+      ctx.fill()
     }
   }
   ctx.restore()
@@ -291,8 +297,13 @@ export function pickEvent(
   let best: number | null = null
   let bestDist = radius * radius
 
-  for (const layer of ['storm', 'death', 'kill', 'loot'] as Layer[]) {
+  // Rarest layers first: a storm death under a pile of loot should still win.
+  const order = [...bundle.config.layerIds].sort(
+    (a, b) => (selection.byLayer[a]?.length ?? 0) - (selection.byLayer[b]?.length ?? 0),
+  )
+  for (const layer of order) {
     const idxs = selection.byLayer[layer]
+    if (!idxs?.length) continue
     for (let i = 0; i < idxs.length; i++) {
       const idx = idxs[i]
       const [px, py] = mapToCanvas(events.u[idx], 1 - events.v[idx], r)

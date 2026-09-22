@@ -34,7 +34,8 @@ three times total.
 
 **Reproduce it.** Open any date, click through matches in the sidebar; "Journeys" reads
 `1 human · N bot` almost every time. Selection totals for all of Ambrose Valley show
-1,799 kills against 505 deaths with the human-vs-human events invisible at that scale.
+1,799 kills against 488 combat deaths, with the human-vs-human events invisible at that
+scale.
 
 **Actionable?** Yes, and it reframes the level-design brief.
 
@@ -119,6 +120,10 @@ Spatial concentration (24×24 grid):
 | Ambrose Valley | 505 | **20%** | 42% |
 | Lockdown | 185 | 22% | 44% |
 | Grand Rift | 52 | 27% | 58% |
+
+*"Deaths" here means all causes. The tool reports the two separately, since they are
+different design problems — Ambrose Valley reads `DEATHS 488` (killed by a bot or player)
+plus `STORM 17`, which is the 505 above.*
 
 Normalising deaths by traffic isolates cells that are lethal *beyond* their popularity —
 these are difficulty spikes, not just busy places:

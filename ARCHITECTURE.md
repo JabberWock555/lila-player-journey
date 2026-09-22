@@ -15,12 +15,15 @@ and a failure mode. So the pipeline runs once at build time and the app is a sta
 | Transport | Packed binary + JSON manifest | ~21 B/event vs ~120 B as JSON; parsed with zero cost as TypedArrays |
 | UI | React 18 + TypeScript + Vite | Typed contracts between ETL and UI; 58 kB gzipped bundle |
 | Drawing | Canvas 2D | Full redraw of 800+ paths + 15k markers in a few ms. WebGL/deck.gl would add ~150 kB and shader maintenance for no gain at this scale |
+| Config | One `dataset.json`, read by the ETL and copied into the manifest | Maps, event types and layers are declared once instead of in eight places across two languages |
 | Hosting | Vercel static | Immutable assets on a CDN; the data ships with the build |
 
 ## Data flow
 
 ```
-player_data/February_*/…nakama-0   1,243 parquet files
+etl/config/dataset.json            maps · event types · layers   (single source of truth)
+        │
+player_data/<Month>_<DD>/…         1,243 parquet files
         │
         │  etl/build_data.py  (one pass, ~20 s)
         │    · decode `event` bytes → str
@@ -31,11 +34,14 @@ player_data/February_*/…nakama-0   1,243 parquet files
         │    · drop redundant duplicate position samples
         │    · sort by (map, match, player, time)
         ▼
-public/data/manifest.json      maps · matches · journeys · players · aggregates   (290 kB)
+public/data/manifest.json      config + maps · matches · journeys · players · totals  (250 kB)
+public/data/build-report.json  validation summary (drift, out-of-bounds, skips)
 public/data/<Map>.bin          x,y,z:f32 │ t:u32 │ ev:u8 │ mi,pi:u16              (1.9 MB total)
 public/maps/<Map>.webp         minimaps downscaled 4320²/9000² → 2048²            (0.73 MB total)
         │
         │  fetch once per map, decoded into TypedArray views (src/lib/data.ts)
+        │  buildDatasetConfig() turns the manifest's config blocks into the
+        │  event-code -> layer lookups the hot paths use (src/lib/types.ts)
         ▼
 selectEvents(bundle, filters)   filters → index sets + summary stats  (src/lib/select.ts)
         │
@@ -104,6 +110,27 @@ Lockdown `u 0.09–0.85, v 0.22–0.83`: comfortably inside the image with the m
 expect from an unreachable border. At high zoom individual paths follow road centrelines and
 turn inside buildings, which is the real proof the projection is correct.
 
+## Configuration and the one invariant that matters
+
+`etl/config/dataset.json` declares the maps (label, `scale`, `originX`, `originZ`,
+minimap file), the event types, and the layers each event belongs to (label, colour,
+marker shape, heatmap ramp). The ETL derives its constants from it and copies the
+`events`/`layers` blocks into the manifest; the frontend builds its lookups from those
+at load. Nothing about a specific map, event or layer is hardcoded in either language,
+so adding any of them is a config edit. The README has the step-by-step.
+
+**The invariant: the `events` list is append-only.** An event's index in that list is
+what the `.bin` files store in their `ev` column, as a single byte. Reordering or
+removing an entry would silently reinterpret every archived binary — `Loot` would read
+back as `Kill`. `Config.assert_event_codes_stable()` compares the list against the
+previously built manifest and refuses to build unless the old order is still a prefix of
+the new one. Appending is always safe, and verified: adding a ninth event type leaves all
+three existing `.bin` files byte-identical.
+
+Two derived groupings follow from the config rather than being listed by hand: position
+samples are the events with `layer: null`, and a journey counts as a death if it contains
+any event whose layer is `death` or `storm`.
+
 ## Assumptions where the data was ambiguous
 
 **`ts` is Unix seconds stored in a millisecond column.** The schema says `timestamp[ms]` and
@@ -161,6 +188,28 @@ when more than one match is selected.
 | Distinct marker **shapes** per event type | Colour only | Markers overlap heavily at POIs; shape survives overlap, colour-blindness and greyscale |
 | View presets that switch with scope | Fixed defaults | 836 overlaid journeys at readable opacity bury the map; one journey at aggregate opacity is invisible. The preset flips with the selection and remains user-overridable |
 | Static hosting | Server-rendered app | Nothing is dynamic. A CDN-served SPA has no cold starts and no runtime cost |
+| Config in JSON read at build time | Config in TypeScript, imported by both | The ETL is Python; a shared JSON file is the only format both ends read without a codegen step |
+| Per-layer counts in the manifest | Named `kills`/`loot`/`storm` fields | Named fields mean a new layer needs a schema change plus UI edits; a `layers` map means it needs neither |
+
+## Scaling roadmap
+
+Shipping the whole dataset to the browser is right at today's size and stops being right
+somewhere around **10 MB / ~30 days** of telemetry — roughly where first load stops
+feeling instant on a normal connection. Current payload is 2.6 MB for 5 days, so there is
+about 6× headroom. Two staged responses, in order, when that threshold approaches:
+
+1. **Shard by day.** Emit `data/<Map>/<YYYY-MM-DD>.bin` plus a small per-map index, and
+   have the loader fetch only the days the date filter selects, with an LRU cache. The
+   date filter and the `(offset, length)` journey slices already exist, so this touches
+   the loading layer and nothing else. The manifest has to split the same way — at 100×
+   the matches it would be ~25 MB on its own.
+2. **Precompute density grids.** Bake a per (map, day, layer) grid in the ETL. Counts are
+   additive, so any date range is the element-wise sum of its days' grids — the
+   all-time heatmap stops needing raw position samples at all, and raw events only load
+   when a single match is opened.
+
+Neither is built. At 5 days they would be speculative complexity, and the ETL prints the
+numbers needed to know when they stop being.
 
 ## Known limits
 
@@ -174,3 +223,8 @@ when more than one match is selected.
 - **Grand Rift's minimap is 2160×2158**, not square. It is treated as square UV space; the
   0.09% vertical error is well below one grid cell.
 - Tuned for desktop. It is a level-design workstation tool; there is no mobile layout.
+- `calibrate_map.py` proposes a map's `scale`/`origin` from where players actually walked,
+  so it under-estimates any border nobody enters — it lands within ~10% on the three
+  known maps. It is a starting point for the visual contact sheet, not an answer.
+- The ETL is a full rebuild; there is no incremental ingest. At 1,243 files it takes ~20 s,
+  so this only matters alongside the sharding work above.

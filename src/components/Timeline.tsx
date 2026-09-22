@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
-import type { MapBundle } from '../lib/types'
+import type { Layer, MapBundle } from '../lib/types'
 import type { Selection } from '../lib/select'
-import { LAYER_COLORS } from '../lib/render'
-import type { Layer } from '../lib/types'
 import { fmtDuration } from './ui'
 
 interface Props {
@@ -53,25 +51,27 @@ export function Timeline(p: Props) {
   // Event-density strip: where in the match things actually happen.
   const histogram = useMemo(() => {
     const BINS = 180
-    const rows: Record<Layer | 'traffic', Float32Array> = {
-      traffic: new Float32Array(BINS),
-      kill: new Float32Array(BINS),
-      death: new Float32Array(BINS),
-      loot: new Float32Array(BINS),
-      storm: new Float32Array(BINS),
-    }
+    const { layerIds } = p.bundle.config
+    const traffic = new Float32Array(BINS)
+    const rows: Record<Layer, Float32Array> = {}
+    for (const id of layerIds) rows[id] = new Float32Array(BINS)
+
     const bin = (t: number) =>
       Math.min(BINS - 1, Math.max(0, Math.floor(((t - selection.tMin) / span) * BINS)))
 
     const { t } = p.bundle.events
-    for (let i = 0; i < selection.positions.length; i++) rows.traffic[bin(t[selection.positions[i]])]++
-    for (const layer of ['kill', 'death', 'loot', 'storm'] as Layer[]) {
-      const idxs = selection.byLayer[layer]
-      for (let i = 0; i < idxs.length; i++) rows[layer][bin(t[idxs[i]])]++
+    for (let i = 0; i < selection.positions.length; i++) traffic[bin(t[selection.positions[i]])]++
+    for (const id of layerIds) {
+      const idxs = selection.byLayer[id]
+      if (!idxs) continue
+      for (let i = 0; i < idxs.length; i++) rows[id][bin(t[idxs[i]])]++
     }
     const max = (a: Float32Array) => a.reduce((m, v) => (v > m ? v : m), 0)
-    return { rows, BINS, maxTraffic: max(rows.traffic) || 1, maxEvent: Math.max(
-      max(rows.kill), max(rows.death), max(rows.loot), max(rows.storm), 1) }
+    return {
+      traffic, rows, layerIds, BINS,
+      maxTraffic: max(traffic) || 1,
+      maxEvent: Math.max(1, ...layerIds.map((id) => max(rows[id]))),
+    }
   }, [selection, span, p.bundle])
 
   const scrub = (clientX: number) => {
@@ -129,18 +129,18 @@ export function Timeline(p: Props) {
             <svg className="absolute inset-0 w-full h-full" preserveAspectRatio="none"
                  viewBox={`0 0 ${histogram.BINS} 100`}>
               <path
-                d={areaPath(histogram.rows.traffic, histogram.maxTraffic, histogram.BINS)}
+                d={areaPath(histogram.traffic, histogram.maxTraffic, histogram.BINS)}
                 fill="rgba(56,189,248,0.16)" stroke="rgba(56,189,248,0.5)" strokeWidth="0.6"
                 vectorEffect="non-scaling-stroke"
               />
-              {(['loot', 'kill', 'death', 'storm'] as Layer[]).map((layer) => (
+              {histogram.layerIds.map((layer) => (
                 <g key={layer}>
                   {Array.from(histogram.rows[layer]).map((v, i) =>
                     v > 0 ? (
                       <rect
                         key={i} x={i} y={100 - (v / histogram.maxEvent) * 62}
                         width={1} height={(v / histogram.maxEvent) * 62}
-                        fill={LAYER_COLORS[layer]} opacity={0.75}
+                        fill={p.bundle.config.colorOf[layer]} opacity={0.75}
                       />
                     ) : null,
                   )}

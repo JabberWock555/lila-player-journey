@@ -1,12 +1,12 @@
 /**
  * Turns the UI filter state into concrete index sets over a map's event arrays.
  * Everything downstream (heatmaps, paths, markers, stats) reads these.
+ *
+ * Layers are whatever `etl/config/dataset.json` declares — nothing here names a
+ * specific one, so adding a layer needs no change in this file.
  */
 
-import {
-  DEATH_CODES, EV, KILL_CODES, LAYER_OF_CODE, POSITION_CODES,
-  type Layer, type MapBundle, type JourneyMeta,
-} from './types'
+import type { JourneyMeta, Layer, MapBundle } from './types'
 
 export interface Filters {
   /** ISO dates to keep; empty = all */
@@ -15,15 +15,16 @@ export interface Filters {
   matchIds: Set<string>
   showHumans: boolean
   showBots: boolean
+  /** layer id -> visible. Missing keys are treated as visible. */
   layers: Record<Layer, boolean>
 }
 
-export const defaultFilters = (): Filters => ({
+export const defaultFilters = (layerIds: Layer[] = []): Filters => ({
   days: new Set(),
   matchIds: new Set(),
   showHumans: true,
   showBots: true,
-  layers: { kill: true, death: true, loot: true, storm: true },
+  layers: Object.fromEntries(layerIds.map((id) => [id, true])),
 })
 
 export interface Selection {
@@ -33,7 +34,7 @@ export interface Selection {
   indices: Uint32Array
   /** position-sample indices only (traffic heatmap + paths) */
   positions: Uint32Array
-  /** discrete event indices by semantic layer */
+  /** discrete event indices by layer id */
   byLayer: Record<Layer, Uint32Array>
   /** inclusive match-time bounds across the selection */
   tMin: number
@@ -47,10 +48,8 @@ export interface SelectionStats {
   botJourneys: number
   matches: number
   events: number
-  kills: number
-  deaths: number
-  loot: number
-  storm: number
+  /** per-layer event counts for the current selection */
+  byLayer: Record<Layer, number>
   /** share of human journeys that end in a death of any kind */
   deathRate: number
   medianDurationSec: number
@@ -59,7 +58,8 @@ export interface SelectionStats {
 const EMPTY = new Uint32Array(0)
 
 export function selectEvents(bundle: MapBundle, f: Filters): Selection {
-  const { meta, events } = bundle
+  const { meta, events, config } = bundle
+
   const matchOk = (m: number) => {
     const match = meta.matches[m]
     if (!match) return false
@@ -85,7 +85,9 @@ export function selectEvents(bundle: MapBundle, f: Filters): Selection {
 
   // Split into position samples and the discrete layers in one pass.
   const positions: number[] = []
-  const buckets: Record<Layer, number[]> = { kill: [], death: [], loot: [], storm: [] }
+  const buckets: Record<Layer, number[]> = {}
+  for (const id of config.layerIds) buckets[id] = []
+
   let tMin = Infinity
   let tMax = -Infinity
 
@@ -95,12 +97,12 @@ export function selectEvents(bundle: MapBundle, f: Filters): Selection {
     const t = events.t[idx]
     if (t < tMin) tMin = t
     if (t > tMax) tMax = t
-    if (POSITION_CODES.has(code)) {
+    if (config.positionCodes.has(code)) {
       positions.push(idx)
       continue
     }
-    const layer = LAYER_OF_CODE[code]
-    if (layer && f.layers[layer]) buckets[layer].push(idx)
+    const layer = config.layerOfCode[code]
+    if (layer && f.layers[layer] !== false && buckets[layer]) buckets[layer].push(idx)
   }
 
   const durations: number[] = []
@@ -120,16 +122,21 @@ export function selectEvents(bundle: MapBundle, f: Filters): Selection {
   }
   durations.sort((a, b) => a - b)
 
+  const byLayer: Record<Layer, Uint32Array> = {}
+  const counts: Record<Layer, number> = {}
+  for (const id of config.layerIds) {
+    const b = buckets[id]
+    byLayer[id] = b.length ? Uint32Array.from(b) : EMPTY
+    counts[id] = b.length
+  }
+
   const stats: SelectionStats = {
     journeys: journeys.length,
     humanJourneys,
     botJourneys,
     matches: matchSet.size,
     events: indices.length,
-    kills: buckets.kill.length,
-    deaths: buckets.death.length + buckets.storm.length,
-    loot: buckets.loot.length,
-    storm: buckets.storm.length,
+    byLayer: counts,
     deathRate: humanJourneys ? deaths / humanJourneys : 0,
     medianDurationSec: durations.length ? durations[durations.length >> 1] : 0,
   }
@@ -138,12 +145,7 @@ export function selectEvents(bundle: MapBundle, f: Filters): Selection {
     journeys,
     indices,
     positions: positions.length ? Uint32Array.from(positions) : EMPTY,
-    byLayer: {
-      kill: buckets.kill.length ? Uint32Array.from(buckets.kill) : EMPTY,
-      death: buckets.death.length ? Uint32Array.from(buckets.death) : EMPTY,
-      loot: buckets.loot.length ? Uint32Array.from(buckets.loot) : EMPTY,
-      storm: buckets.storm.length ? Uint32Array.from(buckets.storm) : EMPTY,
-    },
+    byLayer,
     tMin: Number.isFinite(tMin) ? tMin : 0,
     tMax: Number.isFinite(tMax) ? tMax : 0,
     stats,
@@ -162,19 +164,17 @@ export function gatherUV(bundle: MapBundle, idx: ArrayLike<number>) {
   return { u, v, n }
 }
 
-/** Human-readable label for a single event index (tooltips). */
+/** Human-readable detail for a single event index (tooltips). */
 export function describeEvent(bundle: MapBundle, idx: number) {
-  const { meta, events } = bundle
+  const { meta, events, config } = bundle
   const code = events.ev[idx]
-  const name = (Object.keys(EV) as (keyof typeof EV)[]).find((k) => EV[k] === code) ?? 'Event'
-  const player = meta.players[events.pi[idx]]
-  const match = meta.matches[events.mi[idx]]
+  const layer = config.layerOfCode[code] ?? null
   return {
-    name: name as string,
-    isKill: KILL_CODES.has(code),
-    isDeath: DEATH_CODES.has(code),
-    player,
-    match,
+    name: config.eventTypes[code] ?? 'Event',
+    layer,
+    color: layer ? config.colorOf[layer] : '#94a3b8',
+    player: meta.players[events.pi[idx]],
+    match: meta.matches[events.mi[idx]],
     t: events.t[idx],
     x: events.x[idx],
     y: events.y[idx],
