@@ -188,8 +188,35 @@ when more than one match is selected.
 | Distinct marker **shapes** per event type | Colour only | Markers overlap heavily at POIs; shape survives overlap, colour-blindness and greyscale |
 | View presets that switch with scope | Fixed defaults | 836 overlaid journeys at readable opacity bury the map; one journey at aggregate opacity is invisible. The preset flips with the selection and remains user-overridable |
 | Static hosting | Server-rendered app | Nothing is dynamic. A CDN-served SPA has no cold starts and no runtime cost |
+| `must-revalidate` on `/data` and `/maps` | Long cache + `stale-while-revalidate` | See below — long-caching stable paths broke the app across a deploy |
 | Config in JSON read at build time | Config in TypeScript, imported by both | The ETL is Python; a shared JSON file is the only format both ends read without a codegen step |
 | Per-layer counts in the manifest | Named `kills`/`loot`/`storm` fields | Named fields mean a new layer needs a schema change plus UI edits; a `layers` map means it needs neither |
+
+## Caching, and a bug it caused
+
+Vite content-hashes everything under `/assets`, so those are served `immutable` for a
+year. The telemetry is different: `/data/*.bin`, `/data/manifest.json` and `/maps/*.webp`
+sit at **stable paths** and are replaced in place whenever the ETL re-runs.
+
+The first deploy cached them for 5 minutes with a week-long `stale-while-revalidate`.
+That looked like a reasonable latency/freshness trade, and it was wrong. Across the next
+deploy a browser paired its cached *old* manifest with the *new* content-hashed JS, and
+the app failed outright — the old manifest had no `events` block for the new code to read.
+
+The silent version of that failure is worse. `manifest.json` holds the `(offset, length)`
+slice for every journey; an old `.bin` with a new manifest would not error at all, it
+would just draw the wrong events at the wrong coordinates.
+
+So `/data` and `/maps` are now `max-age=0, must-revalidate`. With ETags a repeat visit is
+eight conditional requests returning `304` with no body — a few hundred milliseconds,
+paid once per load, in exchange for never rendering data from a different build than the
+code reading it. For a tool whose entire job is showing the truth about a dataset, that
+is the right side of the trade.
+
+Two guards back it up, because a proxy could still serve something stale:
+`loadManifest()` rejects a manifest missing any key the app needs and says a hard reload
+will fix it, and `decode()` checks each binary's byte length against `count × 21` from
+the manifest and refuses to render if they disagree.
 
 ## Scaling roadmap
 

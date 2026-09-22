@@ -2,10 +2,28 @@ import type { DatasetConfig, Manifest, MapBundle, MapEvents, MapMeta } from './t
 
 const BASE = import.meta.env.BASE_URL
 
+/**
+ * Fields the app cannot run without. The data files sit at stable paths (unlike
+ * Vite's content-hashed assets), so a browser holding a cached copy from an
+ * older deploy can pair an old manifest with new code. `must-revalidate` in
+ * vercel.json prevents that, but a stale intermediary proxy still could — so
+ * fail with something a person can act on rather than a bare TypeError.
+ */
+const REQUIRED_KEYS = ['eventTypes', 'events', 'layers', 'maps', 'totals'] as const
+
 export async function loadManifest(): Promise<Manifest> {
-  const res = await fetch(`${BASE}data/manifest.json`)
+  const res = await fetch(`${BASE}data/manifest.json`, { cache: 'no-cache' })
   if (!res.ok) throw new Error(`manifest: ${res.status}`)
-  return res.json()
+  const json = await res.json()
+
+  const missing = REQUIRED_KEYS.filter((k) => json?.[k] == null)
+  if (missing.length) {
+    throw new Error(
+      `manifest is missing ${missing.join(', ')} — this usually means a cached ` +
+      `copy from an older build. A hard reload (Cmd/Ctrl+Shift+R) should fix it.`,
+    )
+  }
+  return json as Manifest
 }
 
 /**
@@ -21,6 +39,14 @@ export async function loadManifest(): Promise<Manifest> {
  */
 function decode(buf: ArrayBuffer, meta: MapMeta): MapEvents {
   const n = meta.count
+  // 21 bytes per event: 4+4+4 (xyz) + 4 (t) + 1 (ev) + 2+2 (mi,pi).
+  const expected = n * 21
+  if (buf.byteLength !== expected) {
+    throw new Error(
+      `${meta.id}.bin is ${buf.byteLength} bytes but the manifest describes ` +
+      `${n} events (${expected} bytes) — binary and manifest are from different builds.`,
+    )
+  }
   let off = 0
   const take = <T>(ctor: new (b: ArrayBuffer, o: number, l: number) => T, bytes: number): T => {
     const view = new ctor(buf, off, n)
@@ -71,7 +97,10 @@ export function loadMap(meta: MapMeta, config: DatasetConfig): Promise<MapBundle
 
   const task = (async () => {
     const [buf, image] = await Promise.all([
-      fetch(`${BASE}${meta.bin}`).then((r) => {
+      // `no-cache` (revalidate, not re-download): the byte offsets in the
+      // manifest only describe *this* build's binary, so a cached one from an
+      // older deploy would render silently wrong data rather than fail.
+      fetch(`${BASE}${meta.bin}`, { cache: 'no-cache' }).then((r) => {
         if (!r.ok) throw new Error(`bin: ${r.status}`)
         return r.arrayBuffer()
       }),
