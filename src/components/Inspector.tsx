@@ -1,6 +1,7 @@
 import type { MapBundle } from '../lib/types'
 import type { Selection } from '../lib/select'
 import { ACTOR_COLORS } from '../lib/render'
+import type { Coverage } from '../lib/heatmap'
 import { Section, Slider, Stat, Toggle, fmtDuration, fmtNum, shortId } from './ui'
 import type { HeatMode } from '../App'
 
@@ -27,7 +28,7 @@ interface Props {
   onShowPositions: (v: boolean) => void
   positionScale: number
   onPositionScale: (v: number) => void
-  coverage: { coldCells: number; playableCells: number } | null
+  coverage: Coverage | null
   focusJourney: number | null
   onFocusJourney: (i: number | null) => void
 }
@@ -140,12 +141,25 @@ export function Inspector(p: Props) {
 
         {p.heatMode === 'cold' && p.coverage && (
           <div className="mt-2 panel px-2.5 py-2">
-            <div className="label">Unvisited playable area</div>
-            <div className="text-lg num font-semibold text-sky-300 mt-0.5">
-              {((p.coverage.coldCells / Math.max(1, p.coverage.playableCells)) * 100).toFixed(0)}%
+            <div className="label">Walkable area never entered</div>
+            <div className="flex items-baseline gap-3 mt-0.5">
+              <div>
+                <div className="text-lg num font-semibold text-sky-300">
+                  {pct(p.coverage.interiorCold, p.coverage.interiorCells)}
+                </div>
+                <div className="text-[10px] text-slate-500">interior</div>
+              </div>
+              <div>
+                <div className="text-lg num font-semibold text-sky-300/70">
+                  {pct(p.coverage.coldCells, p.coverage.playableCells)}
+                </div>
+                <div className="text-[10px] text-slate-500">incl. coastline</div>
+              </div>
             </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">
-              {p.coverage.coldCells} of {p.coverage.playableCells} grid cells saw zero traffic
+            <div className="text-[10px] text-slate-500 mt-1 leading-snug">
+              {p.coverage.basis === 'minimap'
+                ? 'Walkable = land on the minimap plus anywhere someone stood. The coastal rim (drawn fainter) may be cliff, so the two figures bracket the real value.'
+                : 'Minimap could not be read as land, so walkable area is estimated from the traffic footprint — treat as rough.'}
             </div>
           </div>
         )}
@@ -240,4 +254,8 @@ function LegendRow({ color, label, shape }: { color: string; label: string; shap
       {label}
     </div>
   )
+}
+
+function pct(a: number, b: number) {
+  return `${((a / Math.max(1, b)) * 100).toFixed(0)}%`
 }

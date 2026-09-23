@@ -142,7 +142,7 @@ export default function App() {
   const cold = useMemo(() => {
     if (!bundle || !selection || heatMode !== 'cold') return null
     const { u, v, n } = gatherUV(bundle, selection.positions)
-    return buildColdmap(u, v, n)
+    return buildColdmap(u, v, n, { image: bundle.image })
   }, [bundle, selection, heatMode])
 
   // --- keyboard shortcuts -------------------------------------------------

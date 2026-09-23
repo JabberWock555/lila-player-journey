@@ -170,35 +170,134 @@ export function buildHeatmap(
 }
 
 /**
- * "Cold spots": areas of the playable map that see (almost) no traffic.
- * Playable area is approximated as the convex-ish footprint of all traffic —
- * we mark a cell cold when it is empty but sits within `reach` cells of
- * somewhere that was visited, which keeps the off-map void out of the result.
+ * Which grid cells are land, read from the minimap itself: not the near-black
+ * void around the island and not open water. Cached per image.
+ *
+ * This replaced an earlier "within N cells of anywhere visited" proxy, which
+ * counted a halo over the void and Lockdown's whole sea as unvisited playable
+ * area — it nearly doubled Ambrose Valley's figure (41% vs 22%).
+ * Mirrors land_mask() in the analysis scripts; keep the thresholds in step.
+ */
+const landCache = new WeakMap<HTMLImageElement, Map<number, Uint8Array>>()
+const SUB = 8
+
+export function landMaskFromImage(image: HTMLImageElement, size: number): Uint8Array {
+  let bySize = landCache.get(image)
+  const hit = bySize?.get(size)
+  if (hit) return hit
+
+  const px = size * SUB
+  const c = document.createElement('canvas')
+  c.width = px
+  c.height = px
+  const ctx = c.getContext('2d', { willReadFrequently: true })!
+  ctx.drawImage(image, 0, 0, px, px)
+  const d = ctx.getImageData(0, 0, px, px).data
+
+  const landCount = new Uint16Array(size * size)
+  for (let y = 0; y < px; y++) {
+    for (let x = 0; x < px; x++) {
+      const i = (y * px + x) * 4
+      const r = d[i], g = d[i + 1], b = d[i + 2]
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b
+      const voidPx = lum < 28
+      const water = b > r + 35 && g > r + 25 && lum > 40
+      if (!voidPx && !water) landCount[((y / SUB) | 0) * size + ((x / SUB) | 0)]++
+    }
+  }
+  const mask = new Uint8Array(size * size)
+  const half = (SUB * SUB) / 2
+  let land = 0
+  for (let i = 0; i < mask.length; i++) {
+    if (landCount[i] > half) { mask[i] = 1; land++ }
+  }
+  // A minimap without a dark background would classify as all-land or none;
+  // signal that so the caller can fall back rather than report nonsense.
+  const frac = land / mask.length
+  const result = frac < 0.1 || frac > 0.95 ? new Uint8Array(0) : mask
+
+  if (!bySize) { bySize = new Map(); landCache.set(image, bySize) }
+  bySize.set(size, result)
+  return result
+}
+
+/** Shrink a mask by `k` cells, so what remains is at least `k` cells from its edge. */
+function erode(mask: Uint8Array, size: number, k: number): Uint8Array {
+  let cur = mask
+  for (let n = 0; n < k; n++) {
+    const next = new Uint8Array(cur.length)
+    for (let y = 1; y < size - 1; y++) {
+      for (let x = 1; x < size - 1; x++) {
+        const i = y * size + x
+        next[i] = cur[i] & cur[i - 1] & cur[i + 1] & cur[i - size] & cur[i + size]
+      }
+    }
+    cur = next
+  }
+  return cur
+}
+
+export interface Coverage {
+  canvas: HTMLCanvasElement
+  /** walkable cells with zero traffic */
+  coldCells: number
+  /** walkable cells: land on the minimap, plus anywhere someone actually stood */
+  playableCells: number
+  /** same ratio for cells at least `coastCells` from the coastline */
+  interiorCold: number
+  interiorCells: number
+  /** how walkable area was determined */
+  basis: 'minimap' | 'traffic-footprint'
+}
+
+/**
+ * "Dead space": walkable parts of the map nobody entered.
+ *
+ * Walkable = land on the minimap (void and open water excluded) plus any cell
+ * someone actually stood in — traffic proves walkability even where the image
+ * is dark. The interior figure drops cells near the coastline, which is often
+ * cliff or decorative edge rather than reachable ground, so the two numbers
+ * bracket the real value.
+ *
+ * Falls back to the old traffic-footprint proxy when the minimap cannot be
+ * read as land vs. background.
  */
 export function buildColdmap(
   us: ArrayLike<number>,
   vs: ArrayLike<number>,
   count: number,
-  opts: { size?: number; reach?: number; opacity?: number } = {},
-): { canvas: HTMLCanvasElement; coldCells: number; playableCells: number } {
+  opts: { size?: number; reach?: number; opacity?: number; image?: HTMLImageElement; coastCells?: number } = {},
+): Coverage {
   const size = opts.size ?? 96
   const reach = opts.reach ?? 6
   const opacity = opts.opacity ?? 0.55
+  const coast = opts.coastCells ?? 3
 
-  const hits = new Float32Array(size * size)
+  const visited = new Uint8Array(size * size)
   for (let i = 0; i < count; i++) {
     const u = us[i]
     const v = vs[i]
     if (u < 0 || u > 1 || v < 0 || v > 1) continue
     const gx = Math.min(size - 1, (u * size) | 0)
     const gy = Math.min(size - 1, ((1 - v) * size) | 0)
-    hits[gy * size + gx] += 1
+    visited[gy * size + gx] = 1
   }
 
-  // Dilate the visited mask to estimate the playable footprint.
-  const reachable = new Float32Array(hits.length)
-  for (let i = 0; i < hits.length; i++) reachable[i] = hits[i] > 0 ? 1 : 0
-  blur(reachable, size, reach)
+  let walkable: Uint8Array
+  let basis: Coverage['basis'] = 'minimap'
+  const land = opts.image ? landMaskFromImage(opts.image, size) : new Uint8Array(0)
+  if (land.length) {
+    walkable = new Uint8Array(size * size)
+    for (let i = 0; i < walkable.length; i++) walkable[i] = land[i] | visited[i]
+  } else {
+    basis = 'traffic-footprint'
+    const reachable = new Float32Array(size * size)
+    for (let i = 0; i < reachable.length; i++) reachable[i] = visited[i]
+    blur(reachable, size, reach)
+    walkable = new Uint8Array(size * size)
+    for (let i = 0; i < walkable.length; i++) walkable[i] = reachable[i] > 0.02 ? 1 : 0
+  }
+  const interior = erode(walkable, size, coast)
 
   const canvas = document.createElement('canvas')
   canvas.width = size
@@ -206,26 +305,21 @@ export function buildColdmap(
   const ctx = canvas.getContext('2d')!
   const img = ctx.createImageData(size, size)
 
-  let coldCells = 0
-  let playableCells = 0
-  for (let i = 0; i < hits.length; i++) {
-    const inPlayable = reachable[i] > 0.02
-    if (!inPlayable) {
-      img.data[i * 4 + 3] = 0
-      continue
-    }
+  let coldCells = 0, playableCells = 0, interiorCold = 0, interiorCells = 0
+  for (let i = 0; i < walkable.length; i++) {
+    if (!walkable[i]) continue
     playableCells++
-    if (hits[i] > 0) {
-      img.data[i * 4 + 3] = 0
-      continue
-    }
+    if (interior[i]) interiorCells++
+    if (visited[i]) continue
     coldCells++
+    if (interior[i]) interiorCold++
     img.data[i * 4] = 90
     img.data[i * 4 + 1] = 120
     img.data[i * 4 + 2] = 255
-    img.data[i * 4 + 3] = 255 * opacity
+    // Coastal rim drawn fainter: it is the less certain part of the figure.
+    img.data[i * 4 + 3] = 255 * opacity * (interior[i] ? 1 : 0.45)
   }
 
   ctx.putImageData(img, 0, 0)
-  return { canvas, coldCells, playableCells }
+  return { canvas, coldCells, playableCells, interiorCold, interiorCells, basis }
 }

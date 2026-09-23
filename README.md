@@ -4,7 +4,17 @@ A browser tool that turns raw LILA BLACK telemetry into something a Level Design
 actually read: player paths drawn on the real minimaps, kill/death/loot/traffic heatmaps,
 dead-space detection, and per-match playback.
 
-**Live:** https://lila-black-journeys.vercel.app
+**Live:** https://lila-black-journeys.vercel.app — no login, no setup
+(fallback mirror: https://jabberwock555.github.io/lila-player-journey/)
+
+| Deliverable | Where |
+|---|---|
+| Working tool | the live link above |
+| Source code | this repo — `src/` (app), `etl/` (data pipeline), `analysis/` (insight numbers) |
+| Tech stack, setup, env vars | this README |
+| Architecture (one page) | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Three insights, with evidence | [INSIGHTS.md](INSIGHTS.md) — every figure regenerates with `python3 analysis/insights.py` |
+| Deeper engineering notes | [docs/ENGINEERING_NOTES.md](docs/ENGINEERING_NOTES.md) |
 
 ![Traffic heatmap across 566 Ambrose Valley matches](docs/screenshot-traffic.png)
 *Aggregate view — traffic density across 566 matches, with kill/death/loot markers overlaid.*
@@ -28,7 +38,7 @@ dead-space detection, and per-match playback.
 | **Positions layer** — every sampled player location as a human/bot dot | right panel → Layers |
 | In-app map calibration and telemetry import | sidebar → + Data |
 | Heatmaps: traffic, kill zones, death zones, loot | right panel |
-| **Dead space** overlay — playable areas with zero traffic | right panel |
+| **Dead space** overlay — walkable land nobody entered (land read from the minimap; interior and coast reported separately) | right panel |
 | Hover any event for actor / match / time / world coords | main canvas |
 | Live world-coordinate readout for cross-checking against the editor | bottom-left |
 
@@ -47,6 +57,7 @@ Keyboard: `Space` play/pause · `1`–`9` heatmap mode · `P`/`O`/`M` toggle pat
 | Frontend | React 18 + TypeScript + Vite | Fast builds, typed data contracts, no runtime framework weight |
 | Rendering | Canvas 2D | 89k events and 800+ polylines render in a few ms; no WebGL dependency or shader maintenance |
 | Styling | Tailwind CSS | Dense, consistent dark UI without a component library |
+| Analysis | Python — `analysis/insights.py` | Reproduces every number and figure in INSIGHTS.md, including the significance checks |
 | Hosting | Vercel (static) | No server needed — see ARCHITECTURE.md |
 
 There is **no backend and no database**. The whole dataset compresses to ~2.6 MB of static
@@ -76,10 +87,20 @@ pip install pyarrow pandas pillow
 python3 etl/build_data.py --src /path/to/player_data
 ```
 
-`--src` must point at the folder holding `February_10/ … February_14/` and `minimaps/`.
+`--src` must point at the folder holding the day folders (`February_10/`, … — any
+`<Month>_<DD>` name works) and `minimaps/`.
 It writes `public/data/manifest.json`, `public/data/<Map>.bin` and `public/maps/<Map>.webp`,
 printing validation counts as it goes (timestamp alignment, out-of-bounds coordinates,
 duplicate rows).
+
+### Reproduce the insights
+
+```bash
+python3 analysis/insights.py --src /path/to/player_data
+```
+
+Prints every statistic quoted in INSIGHTS.md — including the checks behind the claims that
+were *dropped* — and regenerates `docs/insight-*.png`. Takes about 10 seconds.
 
 ### Build
 
@@ -95,8 +116,9 @@ npx vercel --prod
 ```
 
 `vercel.json` pins the build (`npm run build` → `dist/`) and sets caching: immutable for
-Vite's content-hashed `/assets`, short-lived-plus-revalidate for `/data` and `/maps`,
-which sit at stable paths and only change when the ETL re-runs.
+Vite's content-hashed `/assets`, and revalidate-on-every-load for `/data` and `/maps`. Those
+sit at stable paths, so a longer cache once paired an old data file with new code and broke
+the site; with ETags a repeat load costs a handful of empty `304` responses.
 
 A GitHub Pages deploy is kept as a working fallback:
 
@@ -202,6 +224,7 @@ stops being a superset of the previously built manifest.
 etl/build_data.py        parquet -> binary + manifest + downscaled minimaps
 etl/calibrate_map.py     propose scale/origin for a new map + contact sheet
 etl/config/dataset.json  maps, event types, layers — the single source of truth
+analysis/insights.py     reproduces every number and figure in INSIGHTS.md
 public/data/             manifest.json, build-report.json, <Map>.bin
 public/maps/             minimaps downscaled to 2048px webp
 src/lib/
@@ -210,7 +233,9 @@ src/lib/
   select.ts              filters -> index sets + summary stats
   heatmap.ts             density grids, blur, colour ramps, dead-space detection
   render.ts              canvas renderer + world<->screen projection
-src/components/          MapView, Sidebar, Inspector, Timeline, Onboarding
+  importer.ts            in-browser parquet import (same rules as the ETL)
+src/components/          MapView, Sidebar, Inspector, Timeline, Studio, Onboarding
+docs/                    screenshots, insight figures, ENGINEERING_NOTES.md
 vercel.json              build + cache headers for the Vercel deploy
 deploy.sh                build + publish to gh-pages (fallback host)
 ARCHITECTURE.md          design decisions, coordinate mapping, trade-offs
@@ -233,11 +258,17 @@ INSIGHTS.md              three findings from the data, with evidence
    stays drawn — short trail to watch movement, `full` to see the completed route.
 5. **Switch heatmap modes** (`1`–`9`) to compare where players travel, where they kill,
    where they die, and where they loot.
-6. **Turn on Dead space** to see playable geometry that nobody touches, with a percentage
-   readout of unvisited area for the current filter.
+6. **Turn on Dead space** to see walkable land nobody entered, reported as an interior figure
+   and one including the coastal rim. Compare maps only at similar numbers of matches — see
+   the end of INSIGHTS.md for why.
 7. **Toggle Positions** (`O`) to swap the path lines for a dot at every sampled location,
    coloured by human/bot — the view for "where was everyone", without the connecting lines.
 8. **Hover any marker or dot** for the exact actor, match, timestamp and world coordinates,
    and read the live `x / z` under the cursor to line the map up with the editor.
+9. **Check an insight yourself.** Turn **Bots** off (so only human deaths count), pick
+   Lockdown, choose **Death zones**, and hover the bright spot west of the central walled
+   facility — the 12-death hotspot from INSIGHTS.md.
+10. **Add data or a map** with **+ Data** — see *Extending the dataset* above.
 
-Docs: [ARCHITECTURE.md](ARCHITECTURE.md) · [INSIGHTS.md](INSIGHTS.md)
+Docs: [ARCHITECTURE.md](ARCHITECTURE.md) · [INSIGHTS.md](INSIGHTS.md) ·
+[docs/ENGINEERING_NOTES.md](docs/ENGINEERING_NOTES.md)
